@@ -332,12 +332,22 @@ export function CanvasArea({
       objects.forEach(obj => drawCollisionZone(ctx, obj, CANVAS_W, CANVAS_H));
     }
 
-    // Play mode: draw slide track strip BEFORE objects so objects render on top
+    // Play mode: draw track bars BEFORE objects so objects render on top
     if (isPlayMode) {
       objects.forEach(obj => {
         const m = obj.movement;
         if (!m) return;
         ctx.save();
+        if (m.type === 'transition') {
+          // Gray rounded rail from start to end of path
+          ctx.strokeStyle = '#5a5a5a';
+          ctx.lineWidth = 10;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(obj.position.x, obj.position.y);
+          ctx.lineTo(m.endPoint.x, m.endPoint.y);
+          ctx.stroke();
+        }
         if (m.type === 'slide') {
           const { direction, range } = m;
           const { position: pos, width: w, height: h } = obj;

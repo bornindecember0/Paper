@@ -4,7 +4,7 @@ import { RightPanel } from './components/RightPanel';
 import { RotationModal } from './components/RotationModal';
 import { SlideModal } from './components/SlideModal';
 import { CropModal } from './components/CropModal';
-import { PlayOverlay, LEVER_ROW_H } from './components/PlayOverlay';
+import { PlayOverlay, getLeverAreaH } from './components/PlayOverlay';
 import type { CanvasObject, Position } from './types';
 
 export type Tab = 'design' | 'play';
@@ -187,7 +187,7 @@ export default function App() {
     setSliderValues(prev => ({ ...prev, [id]: value }));
   }, []);
 
-  const leverAreaH = objectsWithMovement.length * LEVER_ROW_H;
+  const leverAreaH = getLeverAreaH(objectsWithMovement);
 
   return (
     <div className="app">
