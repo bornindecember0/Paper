@@ -1,180 +1,146 @@
 import { useState, useCallback } from 'react';
 import { CanvasArea, CANVAS_W, CANVAS_H } from './components/CanvasArea';
-import { Sidebar } from './components/Sidebar';
+import { RightPanel } from './components/RightPanel';
+import { TranslateModal } from './components/TranslateModal';
+import { RotationModal } from './components/RotationModal';
 import { SlideModal } from './components/SlideModal';
-import { PlayPanel } from './components/PlayPanel';
-import type { CanvasObject, Position, InteractionMode } from './types';
+import type { CanvasObject, Position } from './types';
+
+export type Tab = 'design' | 'play';
+export type MovementDialog = 'translate' | 'rotation' | 'slide' | null;
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 9);
 }
 
 export default function App() {
+  const [tab, setTab] = useState<Tab>('design');
   const [background, setBackground] = useState<string | null>(null);
+  const [bgFilename, setBgFilename] = useState<string>('');
   const [objects, setObjects] = useState<CanvasObject[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<InteractionMode>('idle');
-  const [showSlideModal, setShowSlideModal] = useState(false);
+  const [dialog, setDialog] = useState<MovementDialog>(null);
   const [sliderValues, setSliderValues] = useState<Record<string, number>>({});
-  const [playMode, setPlayMode] = useState(false);
 
   const selectedObject = objects.find(o => o.id === selectedId);
   const objectsWithMovement = objects.filter(o => o.movement);
 
-  // ── Upload handlers ───────────────────────────────────────────────────────
+  // ── Uploads ───────────────────────────────────────────────────────────────
 
   const handleBackgroundUpload = useCallback((file: File) => {
+    if (background) URL.revokeObjectURL(background);
     setBackground(URL.createObjectURL(file));
-  }, []);
+    setBgFilename(file.name);
+  }, [background]);
 
-  const handleObjectUpload = useCallback((file: File) => {
+  const handleObjectUpload = useCallback((file: File, objectId?: string) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      // Scale down if needed
       const maxDim = 200;
-      let w = img.naturalWidth;
-      let h = img.naturalHeight;
+      let w = img.naturalWidth, h = img.naturalHeight;
       if (w > maxDim || h > maxDim) {
-        const ratio = Math.min(maxDim / w, maxDim / h);
-        w = Math.round(w * ratio);
-        h = Math.round(h * ratio);
+        const r = Math.min(maxDim / w, maxDim / h);
+        w = Math.round(w * r); h = Math.round(h * r);
       }
-      const obj: CanvasObject = {
-        id: uid(),
-        imageUrl: url,
-        position: { x: CANVAS_W / 2, y: CANVAS_H / 2 },
-        width: w,
-        height: h,
-      };
-      setObjects(prev => [...prev, obj]);
-      setSelectedId(obj.id);
+      if (objectId) {
+        // replace image on existing slot
+        setObjects(prev => prev.map(o =>
+          o.id === objectId ? { ...o, imageUrl: url, width: w, height: h, filename: file.name } : o,
+        ));
+      } else {
+        const obj: CanvasObject = {
+          id: uid(),
+          imageUrl: url,
+          filename: file.name,
+          position: { x: CANVAS_W / 2, y: CANVAS_H / 2 },
+          width: w,
+          height: h,
+        };
+        setObjects(prev => [...prev, obj]);
+        setSelectedId(obj.id);
+      }
     };
     img.src = url;
   }, []);
 
-  // ── Canvas click handling ─────────────────────────────────────────────────
-
-  const handleCanvasClick = useCallback((pos: Position) => {
-    if (mode === 'setting-end-point' && selectedId) {
-      setObjects(prev =>
-        prev.map(o =>
-          o.id === selectedId
-            ? { ...o, movement: { type: 'transition', endPoint: pos } }
-            : o,
-        ),
-      );
-      setMode('idle');
-    } else if (mode === 'setting-anchor' && selectedId) {
-      setObjects(prev =>
-        prev.map(o => {
-          if (o.id !== selectedId) return o;
-          // Clamp anchor to object bounding box
-          const clampedAnchor: Position = {
-            x: Math.max(o.position.x - o.width / 2, Math.min(o.position.x + o.width / 2, pos.x)),
-            y: Math.max(o.position.y - o.height / 2, Math.min(o.position.y + o.height / 2, pos.y)),
-          };
-          const existing = o.movement?.type === 'rotation' ? o.movement : null;
-          return {
-            ...o,
-            movement: {
-              type: 'rotation',
-              anchorPoint: clampedAnchor,
-              degrees: existing?.degrees ?? 90,
-              clockwise: existing?.clockwise ?? true,
-            },
-          };
-        }),
-      );
-      setMode('idle');
-    }
-  }, [mode, selectedId]);
-
   // ── Object manipulation ───────────────────────────────────────────────────
 
-  const handleObjectMove = useCallback((id: string, newPos: Position) => {
-    setObjects(prev =>
-      prev.map(o => (o.id === id ? { ...o, position: newPos } : o)),
-    );
+  const handleObjectMove = useCallback((id: string, pos: Position) => {
+    setObjects(prev => prev.map(o => o.id === id ? { ...o, position: pos } : o));
   }, []);
 
-  // ── Movement configuration ────────────────────────────────────────────────
+  // ── Movement config ───────────────────────────────────────────────────────
 
-  const handleSelectMovement = useCallback((type: 'transition' | 'rotation' | 'slide') => {
+  const handleTranslateConfirm = useCallback((endPoint: Position) => {
     if (!selectedId) return;
-    if (type === 'transition') {
-      setMode('setting-end-point');
-    } else if (type === 'rotation') {
-      // Start with anchor at object center; user can refine
-      setObjects(prev =>
-        prev.map(o => {
-          if (o.id !== selectedId) return o;
-          const existing = o.movement?.type === 'rotation' ? o.movement : null;
-          return {
-            ...o,
-            movement: {
-              type: 'rotation',
-              anchorPoint: existing?.anchorPoint ?? { ...o.position },
-              degrees: existing?.degrees ?? 90,
-              clockwise: existing?.clockwise ?? true,
-            },
-          };
-        }),
-      );
-      setMode('setting-anchor');
-    } else {
-      setShowSlideModal(true);
-    }
+    setObjects(prev => prev.map(o =>
+      o.id === selectedId ? { ...o, movement: { type: 'transition', endPoint } } : o,
+    ));
+    setDialog(null);
   }, [selectedId]);
 
-  const handleRotationChange = useCallback((degrees: number, clockwise: boolean) => {
+  const handleRotationConfirm = useCallback((
+    anchorPoint: Position,
+    degrees: number,
+    clockwise: boolean,
+  ) => {
     if (!selectedId) return;
-    setObjects(prev =>
-      prev.map(o => {
-        if (o.id !== selectedId || o.movement?.type !== 'rotation') return o;
-        return { ...o, movement: { ...o.movement, degrees, clockwise } };
-      }),
-    );
+    setObjects(prev => prev.map(o =>
+      o.id === selectedId
+        ? { ...o, movement: { type: 'rotation', anchorPoint, degrees, clockwise } }
+        : o,
+    ));
+    setDialog(null);
   }, [selectedId]);
 
   const handleSlideConfirm = useCallback((
-    direction: 'horizontal' | 'vertical',
-    range: number,
+    startPoint: Position,
+    endPoint: Position,
+    firstObjectId: string,
+    _secondObjectId: string,
   ) => {
-    if (!selectedId) return;
-    setObjects(prev =>
-      prev.map(o =>
-        o.id === selectedId
-          ? { ...o, movement: { type: 'slide', direction, range } }
-          : o,
-      ),
-    );
-    setShowSlideModal(false);
-  }, [selectedId]);
+    if (!firstObjectId) return;
+    // Apply the movement to the first (primary) object as a transition from start to end
+    setObjects(prev => prev.map(o =>
+      o.id === firstObjectId
+        ? {
+            ...o,
+            movement: {
+              type: 'slide',
+              direction: Math.abs(endPoint.x - startPoint.x) >= Math.abs(endPoint.y - startPoint.y)
+                ? 'horizontal'
+                : 'vertical',
+              range: Math.abs(endPoint.x - startPoint.x) >= Math.abs(endPoint.y - startPoint.y)
+                ? endPoint.x - startPoint.x
+                : endPoint.y - startPoint.y,
+            },
+          }
+        : o,
+    ));
+    // If second object selected, give it no movement (it's the static reference)
+    setSelectedId(firstObjectId);
+    setDialog(null);
+  }, []);
 
   const handleClearMovement = useCallback(() => {
     if (!selectedId) return;
-    setObjects(prev =>
-      prev.map(o => (o.id === selectedId ? { ...o, movement: undefined } : o)),
-    );
+    setObjects(prev => prev.map(o => o.id === selectedId ? { ...o, movement: undefined } : o));
   }, [selectedId]);
 
-  // ── Play controls ─────────────────────────────────────────────────────────
+  // ── Tab switching ─────────────────────────────────────────────────────────
 
-  const handlePlay = () => {
-    const initial: Record<string, number> = {};
-    objects.forEach(o => { if (o.movement) initial[o.id] = 0; });
-    setSliderValues(initial);
-    setPlayMode(true);
-    setMode('play');
-    setSelectedId(null);
-  };
-
-  const handleStop = () => {
-    setPlayMode(false);
-    setMode('idle');
-    setSliderValues({});
-  };
+  const handleTabChange = useCallback((t: Tab) => {
+    setTab(t);
+    if (t === 'play') {
+      const init: Record<string, number> = {};
+      objects.forEach(o => { if (o.movement) init[o.id] = 0; });
+      setSliderValues(init);
+      setSelectedId(null);
+    } else {
+      setSliderValues({});
+    }
+  }, [objects]);
 
   const handleSliderChange = useCallback((id: string, value: number) => {
     setSliderValues(prev => ({ ...prev, [id]: value }));
@@ -184,73 +150,77 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="app-header">
-        <div className="header-brand">
-          <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="1" y="1" width="20" height="20" rx="3" stroke="#60a5fa" strokeWidth="1.5"/>
-            <rect x="6" y="6" width="6" height="6" rx="1" fill="#60a5fa"/>
-            <path d="M14 11 L18 11 M16 9 L18 11 L16 13" stroke="#34d399" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-          <span>Canvas Object Movement</span>
-        </div>
-        <div className="header-actions">
-          {!playMode && objectsWithMovement.length > 0 && (
-            <button className="btn btn-play" onClick={handlePlay}>
-              &#9654; Play
-            </button>
-          )}
-          {playMode && (
-            <button className="btn btn-stop" onClick={handleStop}>
-              &#9632; Stop
-            </button>
-          )}
-        </div>
-      </header>
-
-      <div className="app-body">
-        <Sidebar
-          onBackgroundUpload={handleBackgroundUpload}
-          onObjectUpload={handleObjectUpload}
-          selectedObject={selectedObject}
-          mode={mode}
-          onSelectMovement={handleSelectMovement}
-          onRotationChange={handleRotationChange}
-          onClearMovement={handleClearMovement}
-          onCancelMode={() => setMode('idle')}
-        />
-
-        <main className="canvas-wrapper">
-          {(mode === 'setting-end-point' || mode === 'setting-anchor') && (
-            <div className="mode-hint-bar">
-              {mode === 'setting-end-point' && 'Click on the canvas to set the transition end point'}
-              {mode === 'setting-anchor' && 'Click inside the object to set the rotation anchor point'}
-            </div>
-          )}
+      <div className="canvas-area">
+        <div className="canvas-container">
           <CanvasArea
             background={background}
             objects={objects}
-            selectedId={selectedId}
-            mode={mode}
+            selectedId={tab === 'design' ? selectedId : null}
+            isPlayMode={tab === 'play'}
             sliderValues={sliderValues}
-            onCanvasClick={handleCanvasClick}
-            onObjectSelect={id => { if (mode === 'idle') setSelectedId(id); }}
+            onObjectSelect={id => { if (tab === 'design') setSelectedId(id); }}
             onObjectMove={handleObjectMove}
           />
-        </main>
 
-        {playMode && (
-          <PlayPanel
-            objects={objectsWithMovement}
-            sliderValues={sliderValues}
-            onSliderChange={handleSliderChange}
-          />
-        )}
+          {tab === 'play' && objectsWithMovement.length > 0 && (
+            <div className="play-overlay">
+              {objectsWithMovement.map(obj => (
+                <div
+                  key={obj.id}
+                  className="play-row"
+                  style={{ top: `${(obj.position.y / CANVAS_H) * 100}%` }}
+                >
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round((sliderValues[obj.id] ?? 0) * 100)}
+                    onChange={e => handleSliderChange(obj.id, Number(e.target.value) / 100)}
+                    className="play-track"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
-      {showSlideModal && (
+      <RightPanel
+        tab={tab}
+        onTabChange={handleTabChange}
+        background={background}
+        bgFilename={bgFilename}
+        objects={objects}
+        selectedId={selectedId}
+        onBackgroundUpload={handleBackgroundUpload}
+        onObjectUpload={handleObjectUpload}
+        onObjectSelect={setSelectedId}
+        onMovementOpen={setDialog}
+        onClearMovement={handleClearMovement}
+      />
+
+      {dialog === 'translate' && selectedObject && (
+        <TranslateModal
+          objectPos={selectedObject.position}
+          existing={selectedObject.movement?.type === 'transition' ? selectedObject.movement.endPoint : undefined}
+          onConfirm={handleTranslateConfirm}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'rotation' && selectedObject && (
+        <RotationModal
+          objectPos={selectedObject.position}
+          existing={selectedObject.movement?.type === 'rotation' ? selectedObject.movement : undefined}
+          onConfirm={handleRotationConfirm}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'slide' && selectedObject && (
         <SlideModal
+          objects={objects}
+          selectedId={selectedObject.id}
           onConfirm={handleSlideConfirm}
-          onCancel={() => setShowSlideModal(false)}
+          onCancel={() => setDialog(null)}
         />
       )}
     </div>
