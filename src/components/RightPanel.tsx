@@ -38,10 +38,27 @@ export function RightPanel({
   return (
     <aside className="right-panel">
 
-      {/* Images section */}
+      {/* Background section */}
       <div className="panel-section">
         <div className="section-header">
-          <span className="section-title">Images</span>
+          <span className="section-title">Background</span>
+        </div>
+        <div className="image-row" style={{ borderTop: 'none' }}>
+          <div className="image-row-top">
+            <input ref={bgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) { onBackgroundUpload(f); e.target.value = ''; } }} />
+            <button className="btn-import" style={{ width: '100%' }} onClick={() => bgInputRef.current?.click()}>
+              Import Image
+            </button>
+          </div>
+          <span className="image-filename">{bgFilename || (background ? 'loaded' : 'No file selected')}</span>
+        </div>
+      </div>
+
+      {/* Objects section */}
+      <div className="panel-section">
+        <div className="section-header">
+          <span className="section-title">Objects</span>
           <input
             ref={newObjInputRef} type="file" accept="image/*"
             style={{ display: 'none' }}
@@ -53,18 +70,10 @@ export function RightPanel({
           <button className="btn-add" onClick={() => newObjInputRef.current?.click()} title="Add object">+</button>
         </div>
 
-        {/* Background row */}
-        <div className="image-row">
-          <div className="image-row-top">
-            <span className="image-label">Background</span>
-            <input ref={bgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
-              onChange={e => { const f = e.target.files?.[0]; if (f) { onBackgroundUpload(f); e.target.value = ''; } }} />
-            <button className="btn-import" onClick={() => bgInputRef.current?.click()}>Import Image</button>
-          </div>
-          <span className="image-filename">{bgFilename || (background ? 'loaded' : 'No file')}</span>
-        </div>
+        {objects.length === 0 && (
+          <span className="image-filename" style={{ display: 'block', padding: '4px 0' }}>No objects added</span>
+        )}
 
-        {/* Object rows */}
         {objects.map((obj, i) => (
           <div
             key={obj.id}
@@ -81,7 +90,7 @@ export function RightPanel({
               />
               <button className="btn-import"
                 onClick={e => { e.stopPropagation(); objInputRefs.current[obj.id]?.click(); }}>
-                Import Image
+                Replace
               </button>
             </div>
             <span className="image-filename">{obj.filename || 'No name'}</span>

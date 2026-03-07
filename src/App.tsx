@@ -66,6 +66,10 @@ export default function App() {
     setObjects(prev => prev.map(o => o.id === id ? { ...o, position: pos } : o));
   }, []);
 
+  const handleObjectResize = useCallback((id: string, width: number, height: number, position: Position) => {
+    setObjects(prev => prev.map(o => o.id === id ? { ...o, width, height, position } : o));
+  }, []);
+
   // ── Translation end-point: canvas-click picking ───────────────────────────
 
   const handleEndPointPick = useCallback((pos: Position) => {
@@ -201,6 +205,7 @@ export default function App() {
               sliderValues={sliderValues}
               onObjectSelect={id => { if (tab === 'design') setSelectedId(id); }}
               onObjectMove={handleObjectMove}
+              onObjectResize={handleObjectResize}
               onEndPointPick={handleEndPointPick}
             />
           </div>

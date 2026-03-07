@@ -121,7 +121,7 @@ body {
 
 /* ── Right panel ───────────────────────────────────────────────────────────── */
 .right-panel {
-  width: 180px;
+  width: 240px;
   background: var(--white);
   border-left: 1.5px solid var(--ink);
   display: flex;

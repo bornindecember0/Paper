@@ -3,7 +3,7 @@ import type { CanvasObject, Position } from '../types';
 
 export const CANVAS_W = 800;
 export const CANVAS_H = 600;
-const GRID = 50;
+const GRID = 20;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -213,6 +213,48 @@ function drawCollisionZone(ctx: CanvasRenderingContext2D, obj: CanvasObject, cw:
   ctx.restore();
 }
 
+// ── Corner resize handle helpers ───────────────────────────────────────────────
+
+const CORNER_SIZE = 8; // px, half-size of corner handle hit area
+
+type Corner = 'tl' | 'tr' | 'bl' | 'br';
+
+function getCorners(obj: CanvasObject): Record<Corner, Position> {
+  const { position: p, width: w, height: h } = obj;
+  return {
+    tl: { x: p.x - w / 2, y: p.y - h / 2 },
+    tr: { x: p.x + w / 2, y: p.y - h / 2 },
+    bl: { x: p.x - w / 2, y: p.y + h / 2 },
+    br: { x: p.x + w / 2, y: p.y + h / 2 },
+  };
+}
+
+function hitCorner(obj: CanvasObject, pos: Position): Corner | null {
+  const corners = getCorners(obj);
+  for (const [key, cp] of Object.entries(corners) as [Corner, Position][]) {
+    if (
+      Math.abs(pos.x - cp.x) <= CORNER_SIZE &&
+      Math.abs(pos.y - cp.y) <= CORNER_SIZE
+    ) return key;
+  }
+  return null;
+}
+
+function drawCornerHandles(ctx: CanvasRenderingContext2D, obj: CanvasObject) {
+  const corners = getCorners(obj);
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = 1.5;
+  for (const cp of Object.values(corners)) {
+    ctx.beginPath();
+    ctx.rect(cp.x - CORNER_SIZE / 2, cp.y - CORNER_SIZE / 2, CORNER_SIZE, CORNER_SIZE);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -224,16 +266,22 @@ interface Props {
   sliderValues: Record<string, number>;
   onObjectSelect: (id: string | null) => void;
   onObjectMove: (id: string, pos: Position) => void;
+  onObjectResize: (id: string, width: number, height: number, position: Position) => void;
   onEndPointPick: (pos: Position) => void;
 }
 
 export function CanvasArea({
   background, objects, selectedId, isPlayMode, pickingEndPoint,
-  sliderValues, onObjectSelect, onObjectMove, onEndPointPick,
+  sliderValues, onObjectSelect, onObjectMove, onObjectResize, onEndPointPick,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageCache = useRef<Record<string, HTMLImageElement>>({});
   const dragRef = useRef<{ id: string; offX: number; offY: number } | null>(null);
+  const resizeRef = useRef<{
+    id: string; corner: Corner;
+    startMouseX: number; startMouseY: number;
+    startW: number; startH: number; startPos: Position;
+  } | null>(null);
   const didMoveRef = useRef(false);
   const [, redraw] = useState(0);
 
@@ -309,6 +357,11 @@ export function CanvasArea({
         ctx.strokeRect(-obj.width / 2 - 2, -obj.height / 2 - 2, obj.width + 4, obj.height + 4);
       }
       ctx.restore();
+
+      // Corner handles (design mode, selected)
+      if (obj.id === selectedId && !isPlayMode) {
+        drawCornerHandles(ctx, obj);
+      }
     });
 
     // Movement arrows (design mode)
@@ -343,6 +396,25 @@ export function CanvasArea({
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isPlayMode || pickingEndPoint) return;
     const pos = getPos(e);
+
+    // Check corner handles first (only when an object is selected)
+    if (selectedId) {
+      const selectedObj = objects.find(o => o.id === selectedId);
+      if (selectedObj) {
+        const corner = hitCorner(selectedObj, pos);
+        if (corner) {
+          resizeRef.current = {
+            id: selectedId, corner,
+            startMouseX: pos.x, startMouseY: pos.y,
+            startW: selectedObj.width, startH: selectedObj.height,
+            startPos: { ...selectedObj.position },
+          };
+          didMoveRef.current = false;
+          return;
+        }
+      }
+    }
+
     const hit = hitTest(objects, pos);
     if (hit) {
       dragRef.current = { id: hit.id, offX: pos.x - hit.position.x, offY: pos.y - hit.position.y };
@@ -354,13 +426,54 @@ export function CanvasArea({
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (resizeRef.current) {
+      const pos = getPos(e);
+      const { id, corner, startMouseX, startMouseY, startW, startH, startPos } = resizeRef.current;
+      const dx = pos.x - startMouseX;
+      const dy = pos.y - startMouseY;
+
+      let newW = startW;
+      let newH = startH;
+      let newX = startPos.x;
+      let newY = startPos.y;
+
+      // Each corner adjusts width/height and repositions center accordingly
+      if (corner === 'br') {
+        newW = Math.max(10, startW + dx);
+        newH = Math.max(10, startH + dy);
+        newX = startPos.x + (newW - startW) / 2;
+        newY = startPos.y + (newH - startH) / 2;
+      } else if (corner === 'bl') {
+        newW = Math.max(10, startW - dx);
+        newH = Math.max(10, startH + dy);
+        newX = startPos.x - (newW - startW) / 2;
+        newY = startPos.y + (newH - startH) / 2;
+      } else if (corner === 'tr') {
+        newW = Math.max(10, startW + dx);
+        newH = Math.max(10, startH - dy);
+        newX = startPos.x + (newW - startW) / 2;
+        newY = startPos.y - (newH - startH) / 2;
+      } else if (corner === 'tl') {
+        newW = Math.max(10, startW - dx);
+        newH = Math.max(10, startH - dy);
+        newX = startPos.x - (newW - startW) / 2;
+        newY = startPos.y - (newH - startH) / 2;
+      }
+
+      onObjectResize(id, Math.round(newW), Math.round(newH), { x: Math.round(newX), y: Math.round(newY) });
+      didMoveRef.current = true;
+      return;
+    }
     if (!dragRef.current) return;
     const pos = getPos(e);
     onObjectMove(dragRef.current.id, { x: pos.x - dragRef.current.offX, y: pos.y - dragRef.current.offY });
     didMoveRef.current = true;
   };
 
-  const handleMouseUp = () => { dragRef.current = null; };
+  const handleMouseUp = () => {
+    dragRef.current = null;
+    resizeRef.current = null;
+  };
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (pickingEndPoint) {
@@ -368,7 +481,7 @@ export function CanvasArea({
     }
   };
 
-  const cursor = pickingEndPoint ? 'crosshair' : isPlayMode ? 'default' : 'default';
+  const cursor = pickingEndPoint ? 'crosshair' : resizeRef.current ? 'nwse-resize' : isPlayMode ? 'default' : 'default';
 
   return (
     <canvas
