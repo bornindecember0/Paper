@@ -4,6 +4,7 @@ import { RightPanel } from './components/RightPanel';
 import { TranslateModal } from './components/TranslateModal';
 import { RotationModal } from './components/RotationModal';
 import { SlideModal } from './components/SlideModal';
+import { PlayOverlay, LEVER_ROW_H } from './components/PlayOverlay';
 import type { CanvasObject, Position } from './types';
 
 export type Tab = 'design' | 'play';
@@ -148,40 +149,36 @@ export default function App() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // Extra space above canvas in play mode for lever handles
+  const leverAreaH = objectsWithMovement.length * LEVER_ROW_H;
+
   return (
     <div className="app">
       <div className="canvas-area">
-        <div className="canvas-container">
-          <CanvasArea
-            background={background}
-            objects={objects}
-            selectedId={tab === 'design' ? selectedId : null}
-            isPlayMode={tab === 'play'}
-            sliderValues={sliderValues}
-            onObjectSelect={id => { if (tab === 'design') setSelectedId(id); }}
-            onObjectMove={handleObjectMove}
-          />
-
+        <div
+          className="canvas-play-wrapper"
+          style={tab === 'play' ? { marginTop: leverAreaH } : undefined}
+        >
           {tab === 'play' && objectsWithMovement.length > 0 && (
-            <div className="play-overlay">
-              {objectsWithMovement.map(obj => (
-                <div
-                  key={obj.id}
-                  className="play-row"
-                  style={{ top: `${(obj.position.y / CANVAS_H) * 100}%` }}
-                >
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={Math.round((sliderValues[obj.id] ?? 0) * 100)}
-                    onChange={e => handleSliderChange(obj.id, Number(e.target.value) / 100)}
-                    className="play-track"
-                  />
-                </div>
-              ))}
-            </div>
+            <PlayOverlay
+              objects={objectsWithMovement}
+              sliderValues={sliderValues}
+              canvasW={CANVAS_W}
+              canvasH={CANVAS_H}
+              onChange={handleSliderChange}
+            />
           )}
+          <div className="canvas-container">
+            <CanvasArea
+              background={background}
+              objects={objects}
+              selectedId={tab === 'design' ? selectedId : null}
+              isPlayMode={tab === 'play'}
+              sliderValues={sliderValues}
+              onObjectSelect={id => { if (tab === 'design') setSelectedId(id); }}
+              onObjectMove={handleObjectMove}
+            />
+          </div>
         </div>
       </div>
 
