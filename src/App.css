@@ -16,7 +16,7 @@ body {
   font-family: var(--sans);
   font-size: 13px;
   color: var(--ink);
-  background: var(--paper);
+  background: #d4d4d4;
   height: 100vh;
   overflow: hidden;
 }
@@ -25,18 +25,57 @@ body {
 .app {
   display: flex;
   height: 100vh;
-  background: var(--paper);
+  background: #d4d4d4;
 }
 
-/* ── Canvas area ───────────────────────────────────────────────────────────── */
+/* ── Canvas area (gray background matching screenshots) ────────────────────── */
 .canvas-area {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: visible;   /* must be visible so lever handles clear the boundary */
+  overflow: visible;   /* allow levers to extend above canvas boundary */
   position: relative;
+  background: #d4d4d4;
 }
+
+/* Design / Play tabs — top-right of gray canvas area */
+.canvas-tabs {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  z-index: 10;
+}
+
+/* Picking end-point hint bar */
+.picking-hint {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--white);
+  border: 1px solid var(--ink);
+  padding: 5px 12px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  z-index: 10;
+  white-space: nowrap;
+  box-shadow: 2px 2px 0 rgba(0,0,0,0.08);
+}
+.picking-cancel {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-mid);
+  padding: 0 2px;
+  line-height: 1;
+}
+.picking-cancel:hover { color: var(--ink); }
 
 .canvas-play-wrapper {
   position: relative;
@@ -44,7 +83,7 @@ body {
 
 .canvas-container {
   line-height: 0;
-  border: 1.5px solid var(--ink);
+  border: 1px solid var(--ink);
   background: var(--white);
 }
 

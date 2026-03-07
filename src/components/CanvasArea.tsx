@@ -3,8 +3,9 @@ import type { CanvasObject, Position } from '../types';
 
 export const CANVAS_W = 800;
 export const CANVAS_H = 600;
+const GRID = 50;
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function rotatePoint(p: Position, cx: number, cy: number, angleDeg: number): Position {
   const rad = (angleDeg * Math.PI) / 180;
@@ -56,10 +57,10 @@ function hitTest(objects: CanvasObject[], pos: Position): CanvasObject | null {
   return null;
 }
 
-// ── Arrow helpers ─────────────────────────────────────────────────────────────
+// ── Arrow drawing ─────────────────────────────────────────────────────────────
 
 function arrowHead(ctx: CanvasRenderingContext2D, fx: number, fy: number, tx: number, ty: number) {
-  const len = 12;
+  const len = 11;
   const angle = Math.atan2(ty - fy, tx - fx);
   ctx.beginPath();
   ctx.moveTo(tx, ty);
@@ -85,10 +86,8 @@ function drawTransitionArrow(ctx: CanvasRenderingContext2D, from: Position, to: 
 
 function drawRotationArc(
   ctx: CanvasRenderingContext2D,
-  anchor: Position,
-  center: Position,
-  degrees: number,
-  clockwise: boolean,
+  anchor: Position, center: Position,
+  degrees: number, clockwise: boolean,
 ) {
   const radius = Math.hypot(center.x - anchor.x, center.y - anchor.y) + 18;
   const startAngle = Math.atan2(center.y - anchor.y, center.x - anchor.x);
@@ -103,13 +102,14 @@ function drawRotationArc(
   ctx.stroke();
 
   const arrowAngle = endAngle + (clockwise ? 0.15 : -0.15);
-  const ax = anchor.x + radius * Math.cos(endAngle);
-  const ay = anchor.y + radius * Math.sin(endAngle);
-  const bx = anchor.x + radius * Math.cos(arrowAngle);
-  const by = anchor.y + radius * Math.sin(arrowAngle);
-  arrowHead(ctx, bx, by, ax, ay);
+  arrowHead(
+    ctx,
+    anchor.x + radius * Math.cos(arrowAngle),
+    anchor.y + radius * Math.sin(arrowAngle),
+    anchor.x + radius * Math.cos(endAngle),
+    anchor.y + radius * Math.sin(endAngle),
+  );
 
-  // Anchor dot
   ctx.fillStyle = '#555';
   ctx.beginPath();
   ctx.arc(anchor.x, anchor.y, 4, 0, Math.PI * 2);
@@ -173,30 +173,24 @@ function drawCollisionZone(ctx: CanvasRenderingContext2D, obj: CanvasObject, cw:
       { x: pos.x - w / 2, y: pos.y + h / 2 },
     ];
     const hull = convexHull([...corners, ...corners.map(c => ({ x: c.x + dx, y: c.y + dy }))]);
-    ctx.fillStyle = 'rgba(100,100,100,0.12)';
-    ctx.strokeStyle = 'rgba(80,80,80,0.35)';
+    ctx.fillStyle = 'rgba(90,90,90,0.10)';
+    ctx.strokeStyle = 'rgba(80,80,80,0.3)';
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
-    if (hull.length > 0) {
-      ctx.moveTo(hull[0].x, hull[0].y);
-      hull.forEach(p => ctx.lineTo(p.x, p.y));
-      ctx.closePath();
-    }
+    if (hull.length > 0) { ctx.moveTo(hull[0].x, hull[0].y); hull.forEach(p => ctx.lineTo(p.x, p.y)); ctx.closePath(); }
     ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
   }
 
   if (movement.type === 'rotation') {
     const anchor = movement.anchorPoint;
     const corners = [
-      { x: pos.x - w / 2, y: pos.y - h / 2 },
-      { x: pos.x + w / 2, y: pos.y - h / 2 },
-      { x: pos.x + w / 2, y: pos.y + h / 2 },
-      { x: pos.x - w / 2, y: pos.y + h / 2 },
+      { x: pos.x - w / 2, y: pos.y - h / 2 }, { x: pos.x + w / 2, y: pos.y - h / 2 },
+      { x: pos.x + w / 2, y: pos.y + h / 2 }, { x: pos.x - w / 2, y: pos.y + h / 2 },
     ];
     const radius = Math.max(...corners.map(c => Math.hypot(c.x - anchor.x, c.y - anchor.y)));
-    ctx.fillStyle = 'rgba(100,100,100,0.10)';
-    ctx.strokeStyle = 'rgba(80,80,80,0.35)';
+    ctx.fillStyle = 'rgba(90,90,90,0.08)';
+    ctx.strokeStyle = 'rgba(80,80,80,0.3)';
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
@@ -206,17 +200,13 @@ function drawCollisionZone(ctx: CanvasRenderingContext2D, obj: CanvasObject, cw:
 
   if (movement.type === 'slide') {
     let rx: number, ry: number, rw: number, rh: number;
-    if (movement.direction === 'vertical') {
-      rx = pos.x - w / 2; ry = 0; rw = w; rh = ch;
-    } else {
-      rx = 0; ry = pos.y - h / 2; rw = cw; rh = h;
-    }
-    ctx.fillStyle = 'rgba(100,100,100,0.10)';
-    ctx.strokeStyle = 'rgba(80,80,80,0.35)';
+    if (movement.direction === 'vertical') { rx = pos.x - w / 2; ry = 0; rw = w; rh = ch; }
+    else { rx = 0; ry = pos.y - h / 2; rw = cw; rh = h; }
+    ctx.fillStyle = 'rgba(90,90,90,0.08)';
+    ctx.strokeStyle = 'rgba(80,80,80,0.3)';
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    ctx.rect(rx, ry, rw, rh);
+    ctx.beginPath(); ctx.rect(rx, ry, rw, rh);
     ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
   }
 
@@ -230,13 +220,16 @@ interface Props {
   objects: CanvasObject[];
   selectedId: string | null;
   isPlayMode: boolean;
+  pickingEndPoint: boolean;
   sliderValues: Record<string, number>;
   onObjectSelect: (id: string | null) => void;
   onObjectMove: (id: string, pos: Position) => void;
+  onEndPointPick: (pos: Position) => void;
 }
 
 export function CanvasArea({
-  background, objects, selectedId, isPlayMode, sliderValues, onObjectSelect, onObjectMove,
+  background, objects, selectedId, isPlayMode, pickingEndPoint,
+  sliderValues, onObjectSelect, onObjectMove, onEndPointPick,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageCache = useRef<Record<string, HTMLImageElement>>({});
@@ -263,7 +256,7 @@ export function CanvasArea({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // White canvas background
+    // White fill
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
@@ -271,6 +264,18 @@ export function CanvasArea({
     if (background && imageCache.current[background]) {
       ctx.drawImage(imageCache.current[background], 0, 0, CANVAS_W, CANVAS_H);
     }
+
+    // Grid (always drawn, subtle)
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,0,0,0.07)';
+    ctx.lineWidth = 0.5;
+    for (let x = 0; x <= CANVAS_W; x += GRID) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
+    }
+    for (let y = 0; y <= CANVAS_H; y += GRID) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
+    }
+    ctx.restore();
 
     // Collision zones (design mode only)
     if (!isPlayMode) {
@@ -281,13 +286,11 @@ export function CanvasArea({
     objects.forEach(obj => {
       const imgEl = imageCache.current[obj.imageUrl];
       if (!imgEl) return;
-
       const t = isPlayMode ? (sliderValues[obj.id] ?? 0) : 0;
       const { cx, cy, angleDeg } = getAnimatedState(obj, t);
 
       ctx.save();
       ctx.translate(cx, cy);
-
       if (angleDeg !== 0 && obj.movement?.type === 'rotation') {
         const anchorRel = {
           x: obj.movement.anchorPoint.x - obj.position.x,
@@ -297,16 +300,14 @@ export function CanvasArea({
         ctx.rotate((angleDeg * Math.PI) / 180);
         ctx.translate(-anchorRel.x, -anchorRel.y);
       }
-
       ctx.drawImage(imgEl, -obj.width / 2, -obj.height / 2, obj.width, obj.height);
 
-      // Selection border (design mode) — thin dark rectangle
+      // Selection border (design mode)
       if (obj.id === selectedId && !isPlayMode) {
         ctx.strokeStyle = '#444';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(-obj.width / 2 - 2, -obj.height / 2 - 2, obj.width + 4, obj.height + 4);
       }
-
       ctx.restore();
     });
 
@@ -314,27 +315,33 @@ export function CanvasArea({
     if (!isPlayMode) {
       objects.forEach(obj => {
         if (!obj.movement) return;
-        if (obj.movement.type === 'transition') {
-          drawTransitionArrow(ctx, obj.position, obj.movement.endPoint);
-        } else if (obj.movement.type === 'rotation') {
-          drawRotationArc(ctx, obj.movement.anchorPoint, obj.position, obj.movement.degrees, obj.movement.clockwise);
-        } else if (obj.movement.type === 'slide') {
-          drawSlideArrow(ctx, obj);
-        }
+        if (obj.movement.type === 'transition') drawTransitionArrow(ctx, obj.position, obj.movement.endPoint);
+        else if (obj.movement.type === 'rotation') drawRotationArc(ctx, obj.movement.anchorPoint, obj.position, obj.movement.degrees, obj.movement.clockwise);
+        else if (obj.movement.type === 'slide') drawSlideArrow(ctx, obj);
       });
     }
-  }, [background, objects, selectedId, isPlayMode, sliderValues]);
+
+    // Picking mode: pulsing border hint
+    if (pickingEndPoint) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(80,80,80,0.5)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(2, 2, CANVAS_W - 4, CANVAS_H - 4);
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }, [background, objects, selectedId, isPlayMode, pickingEndPoint, sliderValues]);
 
   useEffect(() => { draw(); }, [draw]);
 
-  // Canvas coordinates
   const getPos = (e: React.MouseEvent<HTMLCanvasElement>): Position => {
     const rect = canvasRef.current!.getBoundingClientRect();
     return { x: Math.round(e.clientX - rect.left), y: Math.round(e.clientY - rect.top) };
   };
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isPlayMode) return;
+    if (isPlayMode || pickingEndPoint) return;
     const pos = getPos(e);
     const hit = hitTest(objects, pos);
     if (hit) {
@@ -349,24 +356,30 @@ export function CanvasArea({
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!dragRef.current) return;
     const pos = getPos(e);
-    onObjectMove(dragRef.current.id, {
-      x: pos.x - dragRef.current.offX,
-      y: pos.y - dragRef.current.offY,
-    });
+    onObjectMove(dragRef.current.id, { x: pos.x - dragRef.current.offX, y: pos.y - dragRef.current.offY });
     didMoveRef.current = true;
   };
 
   const handleMouseUp = () => { dragRef.current = null; };
+
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (pickingEndPoint) {
+      onEndPointPick(getPos(e));
+    }
+  };
+
+  const cursor = pickingEndPoint ? 'crosshair' : isPlayMode ? 'default' : 'default';
 
   return (
     <canvas
       ref={canvasRef}
       width={CANVAS_W}
       height={CANVAS_H}
-      style={{ cursor: isPlayMode ? 'default' : (dragRef.current ? 'grabbing' : 'default') }}
+      style={{ cursor, display: 'block' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
+      onClick={handleClick}
     />
   );
 }
