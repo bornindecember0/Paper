@@ -140,9 +140,9 @@ body {
 }
 
 .tab-btn {
-  padding: 4px 13px;
+  padding: 7px 18px;
   font-family: var(--sans);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -183,12 +183,12 @@ body {
 }
 
 .btn-add {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   background: transparent;
   border: 1px solid var(--ink);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 18px;
   line-height: 1;
   display: flex;
   align-items: center;
@@ -232,9 +232,9 @@ body {
 
 .btn-import {
   font-family: var(--sans);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.05em;
-  padding: 3px 7px;
+  padding: 6px 12px;
   background: var(--white);
   border: 1px solid var(--ink);
   cursor: pointer;
@@ -298,9 +298,9 @@ body {
 
 .btn-movement {
   width: 100%;
-  padding: 6px 8px;
+  padding: 10px 8px;
   font-family: var(--sans);
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   text-align: center;
@@ -406,9 +406,9 @@ body {
 
 .dir-btns { display: flex; }
 .dir-btn {
-  padding: 4px 10px;
+  padding: 7px 14px;
   font-family: var(--sans);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   background: var(--white);
@@ -421,6 +421,30 @@ body {
 .dir-btn.active { background: var(--ink); color: var(--white); }
 .dir-btn:hover:not(.active) { background: var(--paper); }
 
+/* ── Crop modal ────────────────────────────────────────────────────────────── */
+.crop-modal {
+  max-width: 620px;
+  width: 95vw;
+}
+.crop-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: var(--paper-mid);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* Locked indicator in panel */
+.locked-label {
+  font-family: var(--sans);
+  font-size: 10px;
+  color: var(--ink-mid);
+  letter-spacing: 0.04em;
+}
+
 .form-note {
   font-family: var(--serif);
   font-size: 10px;
@@ -432,9 +456,9 @@ body {
 
 /* ── Shared button styles ──────────────────────────────────────────────────── */
 .btn {
-  padding: 5px 14px;
+  padding: 8px 20px;
   font-family: var(--sans);
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   border: 1px solid var(--ink);

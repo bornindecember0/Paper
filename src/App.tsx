@@ -3,6 +3,7 @@ import { CanvasArea, CANVAS_W, CANVAS_H } from './components/CanvasArea';
 import { RightPanel } from './components/RightPanel';
 import { RotationModal } from './components/RotationModal';
 import { SlideModal } from './components/SlideModal';
+import { CropModal } from './components/CropModal';
 import { PlayOverlay, LEVER_ROW_H } from './components/PlayOverlay';
 import type { CanvasObject, Position } from './types';
 
@@ -17,10 +18,17 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('design');
   const [background, setBackground] = useState<string | null>(null);
   const [bgFilename, setBgFilename] = useState<string>('');
+  const [bgLocked, setBgLocked] = useState(false);
   const [objects, setObjects] = useState<CanvasObject[]>([]);
+  // Pending crop: raw blob URL + filename + optional objectId (null = background)
+  const [pendingCrop, setPendingCrop] = useState<{
+    url: string; filename: string; objectId: string | null;
+  } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<MovementDialog>(null);
   const [pickingEndPoint, setPickingEndPoint] = useState(false);
+  const [pickingAnchor, setPickingAnchor] = useState(false);
+  const [pendingAnchor, setPendingAnchor] = useState<import('./types').Position | null>(null);
   const [sliderValues, setSliderValues] = useState<Record<string, number>>({});
 
   const selectedObject = objects.find(o => o.id === selectedId);
@@ -29,36 +37,53 @@ export default function App() {
   // ── Uploads ───────────────────────────────────────────────────────────────
 
   const handleBackgroundUpload = useCallback((file: File) => {
-    if (background) URL.revokeObjectURL(background);
-    setBackground(URL.createObjectURL(file));
-    setBgFilename(file.name);
-  }, [background]);
-
-  const handleObjectUpload = useCallback((file: File, objectId?: string) => {
     const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const maxDim = 200;
-      let w = img.naturalWidth, h = img.naturalHeight;
-      if (w > maxDim || h > maxDim) {
-        const r = Math.min(maxDim / w, maxDim / h);
-        w = Math.round(w * r); h = Math.round(h * r);
-      }
-      if (objectId) {
-        setObjects(prev => prev.map(o =>
-          o.id === objectId ? { ...o, imageUrl: url, width: w, height: h, filename: file.name } : o,
-        ));
-      } else {
+    setPendingCrop({ url, filename: file.name, objectId: null });
+  }, []);
+
+  const handleObjectUpload = useCallback((file: File) => {
+    const url = URL.createObjectURL(file);
+    // objectId = 'new' means we create a new object after crop
+    setPendingCrop({ url, filename: file.name, objectId: 'new' });
+  }, []);
+
+  // Finalize crop (called after crop save or skip)
+  const finalizeCrop = useCallback((croppedUrl: string) => {
+    if (!pendingCrop) return;
+    const { filename, objectId } = pendingCrop;
+    if (objectId === null) {
+      // Background
+      if (background) URL.revokeObjectURL(background);
+      setBackground(croppedUrl);
+      setBgFilename(filename);
+      setBgLocked(true);
+    } else {
+      // New object (objectId === 'new')
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 200;
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (w > maxDim || h > maxDim) {
+          const r = Math.min(maxDim / w, maxDim / h);
+          w = Math.round(w * r); h = Math.round(h * r);
+        }
         const obj: CanvasObject = {
-          id: uid(), imageUrl: url, filename: file.name,
+          id: uid(), imageUrl: croppedUrl, filename,
           position: { x: CANVAS_W / 2, y: CANVAS_H / 2 }, width: w, height: h,
+          locked: true,
         };
         setObjects(prev => [...prev, obj]);
         setSelectedId(obj.id);
-      }
-    };
-    img.src = url;
-  }, []);
+      };
+      img.src = croppedUrl;
+    }
+    URL.revokeObjectURL(pendingCrop.url);
+    setPendingCrop(null);
+  }, [pendingCrop, background]);
+
+  const handleCropSkip = useCallback(() => {
+    if (pendingCrop) finalizeCrop(pendingCrop.url);
+  }, [pendingCrop, finalizeCrop]);
 
   // ── Object manipulation ───────────────────────────────────────────────────
 
@@ -82,13 +107,22 @@ export default function App() {
 
   // ── Rotation / Slide config ───────────────────────────────────────────────
 
-  const handleRotationConfirm = useCallback((anchorPoint: Position, degrees: number, clockwise: boolean) => {
-    if (!selectedId) return;
+  const handleAnchorPick = useCallback((pos: Position) => {
+    setPendingAnchor(pos);
+    setPickingAnchor(false);
+    setDialog('rotation');
+  }, []);
+
+  const handleRotationConfirm = useCallback((degrees: number, clockwise: boolean) => {
+    if (!selectedId || !pendingAnchor) return;
     setObjects(prev => prev.map(o =>
-      o.id === selectedId ? { ...o, movement: { type: 'rotation', anchorPoint, degrees, clockwise } } : o,
+      o.id === selectedId
+        ? { ...o, movement: { type: 'rotation', anchorPoint: pendingAnchor, degrees, clockwise } }
+        : o,
     ));
+    setPendingAnchor(null);
     setDialog(null);
-  }, [selectedId]);
+  }, [selectedId, pendingAnchor]);
 
   const handleSlideConfirm = useCallback((
     startPoint: Position, endPoint: Position,
@@ -123,10 +157,11 @@ export default function App() {
 
   const handleMovementOpen = useCallback((type: 'translate' | 'rotation' | 'slide') => {
     if (type === 'translate') {
-      // Enter canvas-click picking mode
       setPickingEndPoint(true);
     } else if (type === 'rotation') {
-      setDialog('rotation');
+      // First pick anchor by clicking on canvas, then configure degrees
+      setPendingAnchor(null);
+      setPickingAnchor(true);
     } else {
       setDialog('slide');
     }
@@ -137,6 +172,7 @@ export default function App() {
   const handleTabChange = useCallback((t: Tab) => {
     setTab(t);
     setPickingEndPoint(false);
+    setPickingAnchor(false);
     if (t === 'play') {
       const init: Record<string, number> = {};
       objects.forEach(o => { if (o.movement) init[o.id] = 0; });
@@ -171,12 +207,13 @@ export default function App() {
         </div>
 
         {/* Picking hint */}
-        {pickingEndPoint && (
+        {(pickingEndPoint || pickingAnchor) && (
           <div className="picking-hint">
-            Click on the canvas to set the end point
+            {pickingEndPoint ? 'Click on the canvas to set the end point'
+              : 'Click inside the object to set the rotation anchor'}
             <button
               className="picking-cancel"
-              onClick={() => setPickingEndPoint(false)}
+              onClick={() => { setPickingEndPoint(false); setPickingAnchor(false); }}
             >✕</button>
           </div>
         )}
@@ -202,11 +239,13 @@ export default function App() {
               selectedId={tab === 'design' ? selectedId : null}
               isPlayMode={tab === 'play'}
               pickingEndPoint={pickingEndPoint}
+              pickingAnchor={pickingAnchor}
               sliderValues={sliderValues}
               onObjectSelect={id => { if (tab === 'design') setSelectedId(id); }}
               onObjectMove={handleObjectMove}
               onObjectResize={handleObjectResize}
               onEndPointPick={handleEndPointPick}
+              onAnchorPick={handleAnchorPick}
             />
           </div>
         </div>
@@ -217,6 +256,7 @@ export default function App() {
         tab={tab}
         background={background}
         bgFilename={bgFilename}
+        bgLocked={bgLocked}
         objects={objects}
         selectedId={selectedId}
         onBackgroundUpload={handleBackgroundUpload}
@@ -227,12 +267,20 @@ export default function App() {
       />
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
-      {dialog === 'rotation' && selectedObject && (
+      {/* Crop modal — shown immediately after any upload */}
+      {pendingCrop && (
+        <CropModal
+          imageUrl={pendingCrop.url}
+          onSave={finalizeCrop}
+          onSkip={handleCropSkip}
+        />
+      )}
+
+      {dialog === 'rotation' && (
         <RotationModal
-          objectPos={selectedObject.position}
-          existing={selectedObject.movement?.type === 'rotation' ? selectedObject.movement : undefined}
+          existing={selectedObject?.movement?.type === 'rotation' ? selectedObject.movement : undefined}
           onConfirm={handleRotationConfirm}
-          onCancel={() => setDialog(null)}
+          onCancel={() => { setDialog(null); setPendingAnchor(null); }}
         />
       )}
       {dialog === 'slide' && selectedObject && (

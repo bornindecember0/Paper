@@ -35,6 +35,7 @@ export interface CanvasObject {
   width: number;
   height: number;
   movement?: Movement;
+  locked?: boolean;
 }
 
 // ── Interaction modes ────────────────────────────────────────────────────────

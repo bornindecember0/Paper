@@ -6,6 +6,7 @@ interface Props {
   tab: Tab;
   background: string | null;
   bgFilename: string;
+  bgLocked: boolean;
   objects: CanvasObject[];
   selectedId: string | null;
   onBackgroundUpload: (file: File) => void;
@@ -25,7 +26,7 @@ function movementLabel(obj: CanvasObject): string {
 }
 
 export function RightPanel({
-  tab, background, bgFilename, objects, selectedId,
+  tab, background, bgFilename, bgLocked, objects, selectedId,
   onBackgroundUpload, onObjectUpload, onObjectSelect,
   onMovementOpen, onClearMovement,
 }: Props) {
@@ -45,11 +46,17 @@ export function RightPanel({
         </div>
         <div className="image-row" style={{ borderTop: 'none' }}>
           <div className="image-row-top">
-            <input ref={bgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
-              onChange={e => { const f = e.target.files?.[0]; if (f) { onBackgroundUpload(f); e.target.value = ''; } }} />
-            <button className="btn-import" style={{ width: '100%' }} onClick={() => bgInputRef.current?.click()}>
-              Import Image
-            </button>
+            {!bgLocked ? (
+              <>
+                <input ref={bgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) { onBackgroundUpload(f); e.target.value = ''; } }} />
+                <button className="btn-import" style={{ width: '100%' }} onClick={() => bgInputRef.current?.click()}>
+                  Import Image
+                </button>
+              </>
+            ) : (
+              <span className="locked-label">🔒 Locked</span>
+            )}
           </div>
           <span className="image-filename">{bgFilename || (background ? 'loaded' : 'No file selected')}</span>
         </div>
@@ -83,15 +90,22 @@ export function RightPanel({
           >
             <div className="image-row-top">
               <span className="image-label">Object #{i + 1}</span>
-              <input
-                ref={el => { objInputRefs.current[obj.id] = el; }}
-                type="file" accept="image/*" style={{ display: 'none' }}
-                onChange={e => { const f = e.target.files?.[0]; if (f) { onObjectUpload(f, obj.id); e.target.value = ''; } }}
-              />
-              <button className="btn-import"
-                onClick={e => { e.stopPropagation(); objInputRefs.current[obj.id]?.click(); }}>
-                Replace
-              </button>
+              {obj.locked
+                ? <span className="locked-label">🔒</span>
+                : (
+                  <>
+                    <input
+                      ref={el => { objInputRefs.current[obj.id] = el; }}
+                      type="file" accept="image/*" style={{ display: 'none' }}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) { onObjectUpload(f, obj.id); e.target.value = ''; } }}
+                    />
+                    <button className="btn-import"
+                      onClick={e => { e.stopPropagation(); objInputRefs.current[obj.id]?.click(); }}>
+                      Replace
+                    </button>
+                  </>
+                )
+              }
             </div>
             <span className="image-filename">{obj.filename || 'No name'}</span>
           </div>

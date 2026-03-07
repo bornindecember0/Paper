@@ -1,11 +1,9 @@
 import { useRef } from 'react';
-import type { CanvasObject, RotationMovement, TransitionMovement, SlideMovement } from '../types';
+import type { CanvasObject, RotationMovement } from '../types';
 
 export const LEVER_ROW_H = 100;   // px per lever row above canvas
 const HANDLE_H      = 100;        // handle fills the full row height
 const HANDLE_W_BASE = 28;         // narrow handle for translation / rotation
-const TRACK_H       = 12;         // dark bar height for translation
-const TRACK_COLOR   = '#5a5a5a';
 
 // ── Per-type helpers ──────────────────────────────────────────────────────────
 
@@ -122,21 +120,6 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
 
           return (
             <g key={obj.id}>
-              {/* Translation: dark gray bar from start to end at object y */}
-              {m.type === 'transition' && (() => {
-                const tm = m as TransitionMovement;
-                const barX = Math.min(obj.position.x, tm.endPoint.x);
-                const barW = Math.abs(tm.endPoint.x - obj.position.x);
-                const barY = totalLeverH + obj.position.y - TRACK_H / 2;
-                return (
-                  <rect
-                    x={barX} y={barY}
-                    width={barW} height={TRACK_H}
-                    fill={TRACK_COLOR} rx="4"
-                  />
-                );
-              })()}
-
               {/* Rotation: curved arrow drawn in the lever area (above canvas) */}
               {m.type === 'rotation' && (() => {
                 const rm = m as RotationMovement;
@@ -147,29 +130,6 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
                     cx={arrowCX} cy={arrowCY}
                     clockwise={rm.clockwise}
                     r={20}
-                  />
-                );
-              })()}
-
-              {/* Slide: show collision strip outline on canvas (subtle) */}
-              {m.type === 'slide' && (() => {
-                const sm = m as SlideMovement;
-                const stripX = sm.direction === 'vertical'
-                  ? obj.position.x - obj.width / 2
-                  : 0;
-                const stripY = sm.direction === 'horizontal'
-                  ? obj.position.y - obj.height / 2 + totalLeverH
-                  : totalLeverH;
-                const stripW = sm.direction === 'vertical' ? obj.width : canvasW;
-                const stripH = sm.direction === 'horizontal' ? obj.height : canvasH;
-                return (
-                  <rect
-                    x={stripX} y={stripY}
-                    width={stripW} height={stripH}
-                    fill="rgba(90,90,90,0.10)"
-                    stroke={TRACK_COLOR}
-                    strokeWidth="1"
-                    strokeDasharray="4 3"
                   />
                 );
               })()}

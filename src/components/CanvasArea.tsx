@@ -263,16 +263,18 @@ interface Props {
   selectedId: string | null;
   isPlayMode: boolean;
   pickingEndPoint: boolean;
+  pickingAnchor: boolean;
   sliderValues: Record<string, number>;
   onObjectSelect: (id: string | null) => void;
   onObjectMove: (id: string, pos: Position) => void;
   onObjectResize: (id: string, width: number, height: number, position: Position) => void;
   onEndPointPick: (pos: Position) => void;
+  onAnchorPick: (pos: Position) => void;
 }
 
 export function CanvasArea({
-  background, objects, selectedId, isPlayMode, pickingEndPoint,
-  sliderValues, onObjectSelect, onObjectMove, onObjectResize, onEndPointPick,
+  background, objects, selectedId, isPlayMode, pickingEndPoint, pickingAnchor,
+  sliderValues, onObjectSelect, onObjectMove, onObjectResize, onEndPointPick, onAnchorPick,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageCache = useRef<Record<string, HTMLImageElement>>({});
@@ -330,6 +332,55 @@ export function CanvasArea({
       objects.forEach(obj => drawCollisionZone(ctx, obj, CANVAS_W, CANVAS_H));
     }
 
+    // Play mode: draw track bars BEFORE objects so objects render on top
+    if (isPlayMode) {
+      objects.forEach(obj => {
+        const m = obj.movement;
+        if (!m) return;
+        ctx.save();
+        if (m.type === 'transition') {
+          const barX = Math.min(obj.position.x, m.endPoint.x);
+          const barW = Math.abs(m.endPoint.x - obj.position.x);
+          const barY = obj.position.y;
+          const barH = 10;
+          ctx.fillStyle = '#5a5a5a';
+          ctx.beginPath();
+          // Rounded rect
+          const r = 4;
+          ctx.moveTo(barX + r, barY - barH / 2);
+          ctx.arcTo(barX + barW, barY - barH / 2, barX + barW, barY + barH / 2, r);
+          ctx.arcTo(barX + barW, barY + barH / 2, barX, barY + barH / 2, r);
+          ctx.arcTo(barX, barY + barH / 2, barX, barY - barH / 2, r);
+          ctx.arcTo(barX, barY - barH / 2, barX + barW, barY - barH / 2, r);
+          ctx.closePath();
+          ctx.fill();
+        }
+        if (m.type === 'slide') {
+          const { direction, range } = m;
+          const { position: pos, width: w, height: h } = obj;
+          const rx = direction === 'vertical' ? pos.x - w / 2 : 0;
+          const ry = direction === 'horizontal' ? pos.y - h / 2 : 0;
+          const rw = direction === 'vertical' ? w : CANVAS_W;
+          const rh = direction === 'horizontal' ? h : CANVAS_H;
+          ctx.fillStyle = 'rgba(90,90,90,0.10)';
+          ctx.strokeStyle = '#5a5a5a';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 3]);
+          ctx.fillRect(rx, ry, rw, rh);
+          ctx.strokeRect(rx, ry, rw, rh);
+          ctx.setLineDash([]);
+          // End-of-range marker
+          const ex = direction === 'horizontal' ? pos.x + range : pos.x;
+          const ey = direction === 'vertical' ? pos.y + range : pos.y;
+          ctx.fillStyle = '#5a5a5a';
+          ctx.beginPath();
+          ctx.arc(ex, ey, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      });
+    }
+
     // Draw objects
     objects.forEach(obj => {
       const imgEl = imageCache.current[obj.imageUrl];
@@ -375,16 +426,16 @@ export function CanvasArea({
     }
 
     // Picking mode: pulsing border hint
-    if (pickingEndPoint) {
+    if (pickingEndPoint || pickingAnchor) {
       ctx.save();
-      ctx.strokeStyle = 'rgba(80,80,80,0.5)';
+      ctx.strokeStyle = pickingAnchor ? 'rgba(60,100,200,0.5)' : 'rgba(80,80,80,0.5)';
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 4]);
       ctx.strokeRect(2, 2, CANVAS_W - 4, CANVAS_H - 4);
       ctx.setLineDash([]);
       ctx.restore();
     }
-  }, [background, objects, selectedId, isPlayMode, pickingEndPoint, sliderValues]);
+  }, [background, objects, selectedId, isPlayMode, pickingEndPoint, pickingAnchor, sliderValues]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -394,7 +445,7 @@ export function CanvasArea({
   };
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isPlayMode || pickingEndPoint) return;
+    if (isPlayMode || pickingEndPoint || pickingAnchor) return;
     const pos = getPos(e);
 
     // Check corner handles first (only when an object is selected)
@@ -476,12 +527,11 @@ export function CanvasArea({
   };
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (pickingEndPoint) {
-      onEndPointPick(getPos(e));
-    }
+    if (pickingEndPoint) { onEndPointPick(getPos(e)); return; }
+    if (pickingAnchor) { onAnchorPick(getPos(e)); return; }
   };
 
-  const cursor = pickingEndPoint ? 'crosshair' : resizeRef.current ? 'nwse-resize' : isPlayMode ? 'default' : 'default';
+  const cursor = (pickingEndPoint || pickingAnchor) ? 'crosshair' : resizeRef.current ? 'nwse-resize' : 'default';
 
   return (
     <canvas

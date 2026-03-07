@@ -1,20 +1,13 @@
 import { useState } from 'react';
-import type { Position, RotationMovement } from '../types';
+import type { RotationMovement } from '../types';
 
 interface Props {
-  objectPos: Position;
   existing?: RotationMovement;
-  onConfirm: (anchorPoint: Position, degrees: number, clockwise: boolean) => void;
+  onConfirm: (degrees: number, clockwise: boolean) => void;
   onCancel: () => void;
 }
 
-export function RotationModal({ objectPos, existing, onConfirm, onCancel }: Props) {
-  const [anchorX, setAnchorX] = useState(
-    existing ? Math.round(existing.anchorPoint.x) : Math.round(objectPos.x),
-  );
-  const [anchorY, setAnchorY] = useState(
-    existing ? Math.round(existing.anchorPoint.y) : Math.round(objectPos.y),
-  );
+export function RotationModal({ existing, onConfirm, onCancel }: Props) {
   const [clockwise, setClockwise] = useState(existing?.clockwise ?? true);
   const [degrees, setDegrees] = useState(existing?.degrees ?? 360);
 
@@ -24,46 +17,20 @@ export function RotationModal({ objectPos, existing, onConfirm, onCancel }: Prop
         <div className="modal-title">Rotation</div>
         <div className="modal-body">
           <div className="form-row">
-            <span className="form-label">Anchor Point :</span>
-            <div className="coord-inputs">
-              <input
-                type="number"
-                className="coord-input"
-                value={anchorX}
-                onChange={e => setAnchorX(Number(e.target.value))}
-                placeholder="x"
-              />
-              <input
-                type="number"
-                className="coord-input"
-                value={anchorY}
-                onChange={e => setAnchorY(Number(e.target.value))}
-                placeholder="y"
-              />
-            </div>
+            <span className="form-label">Direction :</span>
             <div className="dir-btns">
               <button
                 className={`dir-btn ${!clockwise ? 'active' : ''}`}
                 onClick={() => setClockwise(false)}
-              >
-                Counter Clockwise
-              </button>
+              >Counter CW</button>
               <button
                 className={`dir-btn ${clockwise ? 'active' : ''}`}
                 onClick={() => setClockwise(true)}
-              >
-                Clockwise
-              </button>
+              >Clockwise</button>
             </div>
           </div>
           <div className="form-row">
-            <span className="form-label">Rotation Direction :</span>
-            <span style={{ fontSize: 12, color: '#444' }}>
-              {clockwise ? 'Clockwise' : 'Counter Clockwise'}
-            </span>
-          </div>
-          <div className="form-row">
-            <span className="form-label">Angle of Rotation :</span>
+            <span className="form-label">Angle :</span>
             <input
               type="number"
               className="number-input"
@@ -72,14 +39,12 @@ export function RotationModal({ objectPos, existing, onConfirm, onCancel }: Prop
               value={degrees}
               onChange={e => setDegrees(Number(e.target.value))}
             />
+            <span style={{ fontSize: 11, color: '#444' }}>degrees</span>
           </div>
         </div>
         <div className="modal-footer">
           <button className="btn" onClick={onCancel}>Cancel</button>
-          <button
-            className="btn btn-primary"
-            onClick={() => onConfirm({ x: anchorX, y: anchorY }, degrees, clockwise)}
-          >
+          <button className="btn btn-primary" onClick={() => onConfirm(degrees, clockwise)}>
             Apply
           </button>
         </div>
