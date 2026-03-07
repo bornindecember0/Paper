@@ -93,6 +93,7 @@ body {
 .play-overlay {
   position: absolute;
   left: 0;
+  z-index: 2;           /* above canvas so lever is visible (e.g. with transparent bg) */
   pointer-events: none;
 }
 
@@ -315,6 +316,57 @@ body {
 .btn-movement:hover { background: var(--paper-mid); }
 .btn-movement.active { background: var(--ink); color: var(--white); }
 .btn-movement:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
+
+/* Rotation inline config (no modal) */
+.rotation-config {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rotation-config-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rotation-config-label {
+  font-size: 11px;
+  color: var(--ink-mid);
+  min-width: 48px;
+}
+.rotation-config-unit {
+  font-size: 11px;
+  color: var(--ink-mid);
+}
+.rotation-config-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.rotation-config-actions .btn {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.rotation-config-actions .btn-pick {
+  background: var(--ink);
+  color: var(--white);
+  border: 1px solid var(--ink);
+}
+.rotation-config-actions .btn-pick:hover:not(:disabled) {
+  background: var(--ink-mid);
+}
+.rotation-config-actions .btn-pick:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.rotation-config-actions .btn-secondary {
+  background: var(--white);
+  border: 1px solid var(--ink);
+  color: var(--ink);
+}
 
 /* ── Modals ────────────────────────────────────────────────────────────────── */
 .modal-backdrop {

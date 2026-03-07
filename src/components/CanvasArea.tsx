@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import type { CanvasObject, Position } from '../types';
+import { getRotationAnchor } from '../leverGeometry';
 
 export const CANVAS_W = 800;
 export const CANVAS_H = 600;
@@ -7,16 +8,12 @@ const GRID = 20;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function rotatePoint(p: Position, cx: number, cy: number, angleDeg: number): Position {
-  const rad = (angleDeg * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  const dx = p.x - cx;
-  const dy = p.y - cy;
-  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
-}
-
-function getAnimatedState(obj: CanvasObject, t: number): { cx: number; cy: number; angleDeg: number } {
+function getAnimatedState(obj: CanvasObject, t: number): {
+  cx: number;
+  cy: number;
+  angleDeg: number;
+  pivot?: Position;
+} {
   const { position: pos, movement } = obj;
   if (!movement) return { cx: pos.x, cy: pos.y, angleDeg: 0 };
 
@@ -29,9 +26,8 @@ function getAnimatedState(obj: CanvasObject, t: number): { cx: number; cy: numbe
   }
   if (movement.type === 'rotation') {
     const totalDeg = movement.degrees * (movement.clockwise ? 1 : -1) * t;
-    const anchor = movement.anchorPoint;
-    const rotated = rotatePoint(pos, anchor.x, anchor.y, totalDeg);
-    return { cx: rotated.x, cy: rotated.y, angleDeg: totalDeg };
+    const pivot = getRotationAnchor(obj);
+    return { cx: pos.x, cy: pos.y, angleDeg: totalDeg, pivot };
   }
   if (movement.type === 'slide') {
     const dist = movement.range * t;
@@ -183,7 +179,7 @@ function drawCollisionZone(ctx: CanvasRenderingContext2D, obj: CanvasObject, cw:
   }
 
   if (movement.type === 'rotation') {
-    const anchor = movement.anchorPoint;
+    const anchor = getRotationAnchor(obj);
     const corners = [
       { x: pos.x - w / 2, y: pos.y - h / 2 }, { x: pos.x + w / 2, y: pos.y - h / 2 },
       { x: pos.x + w / 2, y: pos.y + h / 2 }, { x: pos.x - w / 2, y: pos.y + h / 2 },
@@ -329,7 +325,11 @@ export function CanvasArea({
 
     // Collision zones (design mode only)
     if (!isPlayMode) {
-      objects.forEach(obj => drawCollisionZone(ctx, obj, CANVAS_W, CANVAS_H));
+      objects.forEach(obj => {
+        // When picking anchor, skip rotation viz for selected object (user is setting anchor)
+        if (pickingAnchor && obj.id === selectedId && obj.movement?.type === 'rotation') return;
+        drawCollisionZone(ctx, obj, CANVAS_W, CANVAS_H);
+      });
     }
 
     // Play mode: draw track bars BEFORE objects so objects render on top
@@ -379,15 +379,13 @@ export function CanvasArea({
       const imgEl = imageCache.current[obj.imageUrl];
       if (!imgEl) return;
       const t = isPlayMode ? (sliderValues[obj.id] ?? 0) : 0;
-      const { cx, cy, angleDeg } = getAnimatedState(obj, t);
+      const { cx, cy, angleDeg, pivot } = getAnimatedState(obj, t);
 
       ctx.save();
       ctx.translate(cx, cy);
-      if (angleDeg !== 0 && obj.movement?.type === 'rotation') {
-        const anchorRel = {
-          x: obj.movement.anchorPoint.x - obj.position.x,
-          y: obj.movement.anchorPoint.y - obj.position.y,
-        };
+      if (angleDeg !== 0 && pivot) {
+        // 以 anchor 为圆心自转：pivot 在 world 坐标，相对当前 center 的偏移
+        const anchorRel = { x: pivot.x - cx, y: pivot.y - cy };
         ctx.translate(anchorRel.x, anchorRel.y);
         ctx.rotate((angleDeg * Math.PI) / 180);
         ctx.translate(-anchorRel.x, -anchorRel.y);
@@ -402,8 +400,8 @@ export function CanvasArea({
       }
       ctx.restore();
 
-      // Corner handles (design mode, selected)
-      if (obj.id === selectedId && !isPlayMode) {
+      // Corner handles (design mode, selected) — hide when picking anchor
+      if (obj.id === selectedId && !isPlayMode && !pickingAnchor) {
         drawCornerHandles(ctx, obj);
       }
     });
@@ -412,8 +410,10 @@ export function CanvasArea({
     if (!isPlayMode) {
       objects.forEach(obj => {
         if (!obj.movement) return;
+        // When picking anchor, skip rotation viz for selected object (user is setting anchor)
+        if (pickingAnchor && obj.id === selectedId && obj.movement.type === 'rotation') return;
         if (obj.movement.type === 'transition') drawTransitionArrow(ctx, obj.position, obj.movement.endPoint);
-        else if (obj.movement.type === 'rotation') drawRotationArc(ctx, obj.movement.anchorPoint, obj.position, obj.movement.degrees, obj.movement.clockwise);
+        else if (obj.movement.type === 'rotation') drawRotationArc(ctx, getRotationAnchor(obj), obj.position, obj.movement.degrees, obj.movement.clockwise);
         else if (obj.movement.type === 'slide') drawSlideArrow(ctx, obj);
       });
     }
@@ -521,7 +521,18 @@ export function CanvasArea({
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (pickingEndPoint) { onEndPointPick(getPos(e)); return; }
-    if (pickingAnchor) { onAnchorPick(getPos(e)); return; }
+    if (pickingAnchor) {
+      const pos = getPos(e);
+      const obj = selectedId ? objects.find(o => o.id === selectedId) : null;
+      const clamped = obj
+        ? {
+            x: Math.round(Math.max(obj.position.x - obj.width / 2, Math.min(obj.position.x + obj.width / 2, pos.x))),
+            y: Math.round(Math.max(obj.position.y - obj.height / 2, Math.min(obj.position.y + obj.height / 2, pos.y))),
+          }
+        : pos;
+      onAnchorPick(clamped);
+      return;
+    }
   };
 
   const cursor = (pickingEndPoint || pickingAnchor) ? 'crosshair' : resizeRef.current ? 'nwse-resize' : 'default';

@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react';
 import { CanvasArea, CANVAS_W, CANVAS_H } from './components/CanvasArea';
 import { RightPanel } from './components/RightPanel';
-import { RotationModal } from './components/RotationModal';
 import { SlideModal } from './components/SlideModal';
 import { CropModal } from './components/CropModal';
 import { PlayOverlay, getLeverAreaH } from './components/PlayOverlay';
@@ -28,7 +27,9 @@ export default function App() {
   const [dialog, setDialog] = useState<MovementDialog>(null);
   const [pickingEndPoint, setPickingEndPoint] = useState(false);
   const [pickingAnchor, setPickingAnchor] = useState(false);
-  const [pendingAnchor, setPendingAnchor] = useState<import('./types').Position | null>(null);
+  const [rotationConfigOpen, setRotationConfigOpen] = useState(false);
+  const [rotationDegrees, setRotationDegrees] = useState(360);
+  const [rotationClockwise, setRotationClockwise] = useState(true);
   const [sliderValues, setSliderValues] = useState<Record<string, number>>({});
 
   const selectedObject = objects.find(o => o.id === selectedId);
@@ -92,7 +93,21 @@ export default function App() {
   }, []);
 
   const handleObjectResize = useCallback((id: string, width: number, height: number, position: Position) => {
-    setObjects(prev => prev.map(o => o.id === id ? { ...o, width, height, position } : o));
+    setObjects(prev => prev.map(o => {
+      if (o.id !== id) return o;
+      const updated = { ...o, width, height, position };
+      if (o.movement?.type === 'rotation') {
+        const ap = o.movement.anchorPoint;
+        const maxX = width / 2;
+        const maxY = height / 2;
+        const clamped = {
+          x: Math.max(-maxX, Math.min(maxX, ap.x)),
+          y: Math.max(-maxY, Math.min(maxY, ap.y)),
+        };
+        updated.movement = { ...o.movement, anchorPoint: clamped };
+      }
+      return updated;
+    }));
   }, []);
 
   // ── Translation end-point: canvas-click picking ───────────────────────────
@@ -108,21 +123,16 @@ export default function App() {
   // ── Rotation / Slide config ───────────────────────────────────────────────
 
   const handleAnchorPick = useCallback((pos: Position) => {
-    setPendingAnchor(pos);
+    if (!selectedId) return;
+    setObjects(prev => prev.map(o => {
+      if (o.id !== selectedId) return o;
+      // Store anchor as offset from object center so it moves with the object
+      const anchorOffset = { x: pos.x - o.position.x, y: pos.y - o.position.y };
+      return { ...o, movement: { type: 'rotation', anchorPoint: anchorOffset, degrees: rotationDegrees, clockwise: rotationClockwise } };
+    }));
     setPickingAnchor(false);
-    setDialog('rotation');
-  }, []);
-
-  const handleRotationConfirm = useCallback((degrees: number, clockwise: boolean) => {
-    if (!selectedId || !pendingAnchor) return;
-    setObjects(prev => prev.map(o =>
-      o.id === selectedId
-        ? { ...o, movement: { type: 'rotation', anchorPoint: pendingAnchor, degrees, clockwise } }
-        : o,
-    ));
-    setPendingAnchor(null);
-    setDialog(null);
-  }, [selectedId, pendingAnchor]);
+    setRotationConfigOpen(false);
+  }, [selectedId, rotationDegrees, rotationClockwise]);
 
   const handleSlideConfirm = useCallback((
     startPoint: Position, endPoint: Position,
@@ -159,13 +169,15 @@ export default function App() {
     if (type === 'translate') {
       setPickingEndPoint(true);
     } else if (type === 'rotation') {
-      // First pick anchor by clicking on canvas, then configure degrees
-      setPendingAnchor(null);
-      setPickingAnchor(true);
+      const rot = selectedObject?.movement?.type === 'rotation' ? selectedObject.movement : undefined;
+      setRotationDegrees(rot?.degrees ?? 360);
+      setRotationClockwise(rot?.clockwise ?? true);
+      setRotationConfigOpen(true);
+      setPickingAnchor(false);
     } else {
       setDialog('slide');
     }
-  }, []);
+  }, [selectedObject]);
 
   // ── Tab switching ─────────────────────────────────────────────────────────
 
@@ -173,6 +185,7 @@ export default function App() {
     setTab(t);
     setPickingEndPoint(false);
     setPickingAnchor(false);
+    setRotationConfigOpen(false);
     if (t === 'play') {
       const init: Record<string, number> = {};
       objects.forEach(o => { if (o.movement) init[o.id] = 0; });
@@ -264,6 +277,14 @@ export default function App() {
         onObjectSelect={setSelectedId}
         onMovementOpen={handleMovementOpen}
         onClearMovement={handleClearMovement}
+        rotationConfigOpen={rotationConfigOpen}
+        rotationDegrees={rotationDegrees}
+        rotationClockwise={rotationClockwise}
+        onRotationDegreesChange={setRotationDegrees}
+        onRotationClockwiseChange={setRotationClockwise}
+        onRotationPickAnchor={() => setPickingAnchor(true)}
+        onRotationCancel={() => { setRotationConfigOpen(false); setPickingAnchor(false); }}
+        pickingAnchor={pickingAnchor}
       />
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
@@ -276,13 +297,6 @@ export default function App() {
         />
       )}
 
-      {dialog === 'rotation' && (
-        <RotationModal
-          existing={selectedObject?.movement?.type === 'rotation' ? selectedObject.movement : undefined}
-          onConfirm={handleRotationConfirm}
-          onCancel={() => { setDialog(null); setPendingAnchor(null); }}
-        />
-      )}
       {dialog === 'slide' && selectedObject && (
         <SlideModal
           objects={objects}

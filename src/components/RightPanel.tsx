@@ -14,6 +14,15 @@ interface Props {
   onObjectSelect: (id: string) => void;
   onMovementOpen: (type: 'translate' | 'rotation' | 'slide') => void;
   onClearMovement: () => void;
+  // Rotation inline config (no modal)
+  rotationConfigOpen: boolean;
+  rotationDegrees: number;
+  rotationClockwise: boolean;
+  onRotationDegreesChange: (v: number) => void;
+  onRotationClockwiseChange: (v: boolean) => void;
+  onRotationPickAnchor: () => void;
+  onRotationCancel: () => void;
+  pickingAnchor: boolean;
 }
 
 function movementLabel(obj: CanvasObject): string {
@@ -29,6 +38,10 @@ export function RightPanel({
   tab, background, bgFilename, bgLocked, objects, selectedId,
   onBackgroundUpload, onObjectUpload, onObjectSelect,
   onMovementOpen, onClearMovement,
+  rotationConfigOpen, rotationDegrees, rotationClockwise,
+  onRotationDegreesChange, onRotationClockwiseChange,
+  onRotationPickAnchor, onRotationCancel,
+  pickingAnchor,
 }: Props) {
   const bgInputRef = useRef<HTMLInputElement>(null);
   const objInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -130,7 +143,7 @@ export function RightPanel({
             onClick={() => onMovementOpen('translate')}
           >Translate</button>
           <button
-            className={`btn-movement ${selectedObject?.movement?.type === 'rotation' ? 'active' : ''}`}
+            className={`btn-movement ${selectedObject?.movement?.type === 'rotation' || rotationConfigOpen ? 'active' : ''}`}
             disabled={!selectedObject || tab === 'play'}
             onClick={() => onMovementOpen('rotation')}
           >Rotation</button>
@@ -140,6 +153,47 @@ export function RightPanel({
             onClick={() => onMovementOpen('slide')}
           >Slide</button>
         </div>
+
+        {/* Rotation inline config — no modal, canvas stays visible */}
+        {rotationConfigOpen && selectedObject && (
+          <div className="rotation-config">
+            <div className="rotation-config-row">
+              <span className="rotation-config-label">Direction</span>
+              <div className="dir-btns">
+                <button
+                  className={`dir-btn ${!rotationClockwise ? 'active' : ''}`}
+                  onClick={() => onRotationClockwiseChange(false)}
+                >CCW</button>
+                <button
+                  className={`dir-btn ${rotationClockwise ? 'active' : ''}`}
+                  onClick={() => onRotationClockwiseChange(true)}
+                >CW</button>
+              </div>
+            </div>
+            <div className="rotation-config-row">
+              <span className="rotation-config-label">Angle</span>
+              <input
+                type="number"
+                className="number-input"
+                min={1}
+                max={360}
+                value={rotationDegrees}
+                onChange={e => onRotationDegreesChange(Number(e.target.value))}
+              />
+              <span className="rotation-config-unit">°</span>
+            </div>
+            <div className="rotation-config-actions">
+              <button
+                className="btn btn-pick"
+                onClick={onRotationPickAnchor}
+                disabled={pickingAnchor}
+              >
+                {pickingAnchor ? 'Click inside object…' : (selectedObject.movement?.type === 'rotation' ? 'Change anchor' : 'Pick anchor')}
+              </button>
+              <button className="btn btn-secondary" onClick={onRotationCancel}>Cancel</button>
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );

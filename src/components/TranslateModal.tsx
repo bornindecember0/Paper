@@ -9,15 +9,21 @@ interface Props {
 }
 
 export function TranslateModal({ objectPos, existing, onConfirm, onCancel }: Props) {
-  const [startX, setStartX] = useState(Math.round(objectPos.x));
-  const [startY, setStartY] = useState(Math.round(objectPos.y));
-  const [endX, setEndX] = useState(existing ? Math.round(existing.x) : Math.round(objectPos.x));
-  const [endY, setEndY] = useState(existing ? Math.round(existing.y) : Math.round(objectPos.y));
+  const startX = Math.round(objectPos.x);
+  const startY = Math.round(objectPos.y);
+
+  const [endX, setEndX] = useState(
+    existing ? Math.round(existing.x) : Math.round(objectPos.x),
+  );
+  const [endY, setEndY] = useState(
+    existing ? Math.round(existing.y) : Math.round(objectPos.y),
+  );
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal-title">Translate</div>
+
         <div className="modal-body">
           <div className="form-row">
             <span className="form-label">Start Point :</span>
@@ -26,18 +32,19 @@ export function TranslateModal({ objectPos, existing, onConfirm, onCancel }: Pro
                 type="number"
                 className="coord-input"
                 value={startX}
-                onChange={e => setStartX(Number(e.target.value))}
+                readOnly
                 placeholder="x"
               />
               <input
                 type="number"
                 className="coord-input"
                 value={startY}
-                onChange={e => setStartY(Number(e.target.value))}
+                readOnly
                 placeholder="y"
               />
             </div>
           </div>
+
           <div className="form-row">
             <span className="form-label">End Point :</span>
             <div className="coord-inputs">
@@ -57,10 +64,23 @@ export function TranslateModal({ objectPos, existing, onConfirm, onCancel }: Pro
               />
             </div>
           </div>
+
+          <div style={{ marginTop: 10, fontSize: 12, color: '#666', lineHeight: 1.45 }}>
+            Start point is the object&apos;s current position.
+            End point defines the translation direction.
+            The lever is a fixed rigid bar attached to the object and only the part outside
+            the board is visible.
+          </div>
         </div>
+
         <div className="modal-footer">
-          <button className="btn" onClick={onCancel}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => onConfirm({ x: endX, y: endY })}>
+          <button className="btn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => onConfirm({ x: endX, y: endY })}
+          >
             Apply
           </button>
         </div>

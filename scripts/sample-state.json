@@ -1,0 +1,22 @@
+{
+  "objects": [
+    {
+      "id": "a",
+      "filename": "x.png",
+      "position": { "x": 100, "y": 100 },
+      "width": 50,
+      "height": 50,
+      "movement": { "type": "transition", "endPoint": { "x": 200, "y": 150 } }
+    },
+    {
+      "id": "b",
+      "filename": "y.png",
+      "position": { "x": 300, "y": 300 },
+      "width": 40,
+      "height": 60,
+      "movement": { "type": "rotation", "anchorPoint": { "x": 5, "y": 10 }, "degrees": 360, "clockwise": true }
+    }
+  ],
+  "canvasW": 800,
+  "canvasH": 600
+}
