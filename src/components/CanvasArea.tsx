@@ -332,29 +332,12 @@ export function CanvasArea({
       objects.forEach(obj => drawCollisionZone(ctx, obj, CANVAS_W, CANVAS_H));
     }
 
-    // Play mode: draw track bars BEFORE objects so objects render on top
+    // Play mode: draw slide track strip BEFORE objects so objects render on top
     if (isPlayMode) {
       objects.forEach(obj => {
         const m = obj.movement;
         if (!m) return;
         ctx.save();
-        if (m.type === 'transition') {
-          const barX = Math.min(obj.position.x, m.endPoint.x);
-          const barW = Math.abs(m.endPoint.x - obj.position.x);
-          const barY = obj.position.y;
-          const barH = 10;
-          ctx.fillStyle = '#5a5a5a';
-          ctx.beginPath();
-          // Rounded rect
-          const r = 4;
-          ctx.moveTo(barX + r, barY - barH / 2);
-          ctx.arcTo(barX + barW, barY - barH / 2, barX + barW, barY + barH / 2, r);
-          ctx.arcTo(barX + barW, barY + barH / 2, barX, barY + barH / 2, r);
-          ctx.arcTo(barX, barY + barH / 2, barX, barY - barH / 2, r);
-          ctx.arcTo(barX, barY - barH / 2, barX + barW, barY - barH / 2, r);
-          ctx.closePath();
-          ctx.fill();
-        }
         if (m.type === 'slide') {
           const { direction, range } = m;
           const { position: pos, width: w, height: h } = obj;

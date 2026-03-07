@@ -134,21 +134,23 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
                 );
               })()}
 
-              {/* Connector: handle bottom-center → target on canvas */}
-              <line
-                x1={hcx} y1={rowBottom}
-                x2={targetX} y2={targetY}
-                stroke="#111" strokeWidth="1"
-              />
-
-              {/* Dot at target */}
-              <circle cx={targetX} cy={targetY} r={3} fill="#111" />
-              {isRot && (
-                <circle cx={targetX} cy={targetY} r={8}
-                  fill="none" stroke="#111" strokeWidth="1" />
+              {/* Connector + dot only for rotation and slide, not transition */}
+              {m.type !== 'transition' && (
+                <>
+                  <line
+                    x1={hcx} y1={rowBottom}
+                    x2={targetX} y2={targetY}
+                    stroke="#111" strokeWidth="1"
+                  />
+                  <circle cx={targetX} cy={targetY} r={3} fill="#111" />
+                  {isRot && (
+                    <circle cx={targetX} cy={targetY} r={8}
+                      fill="none" stroke="#111" strokeWidth="1" />
+                  )}
+                </>
               )}
 
-              {/* Handle label (object index) — small, above handle */}
+              {/* Handle label */}
               <text
                 x={hcx} y={i * LEVER_ROW_H + 12}
                 textAnchor="middle"
@@ -173,13 +175,24 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
         const hW = handleWidth(obj);
         const handleLeft = hcx - hW / 2;
         const handleTop  = i * LEVER_ROW_H;
+
+        // For transition: extend lever bar all the way to the object's top edge.
+        // The canvas sits on top (z-index), so only the above-canvas part is visible.
+        let leverH = HANDLE_H;
+        if (obj.movement?.type === 'transition') {
+          const m = obj.movement;
+          const animY = obj.position.y + (m.endPoint.y - obj.position.y) * t;
+          const objTopInOverlay = totalLeverH + animY - obj.height / 2;
+          leverH = Math.max(HANDLE_H, objTopInOverlay - handleTop);
+        }
+
         return (
           <LeverHandle
             key={obj.id}
             left={handleLeft}
             top={handleTop}
             width={hW}
-            height={HANDLE_H}
+            height={leverH}
             value={t}
             obj={obj}
             canvasW={canvasW}

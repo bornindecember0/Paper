@@ -85,6 +85,8 @@ body {
   line-height: 0;
   border: 1px solid var(--ink);
   background: var(--white);
+  position: relative;
+  z-index: 1;
 }
 
 /* ── Lever overlay ─────────────────────────────────────────────────────────── */
