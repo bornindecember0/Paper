@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import type { CanvasObject, RotationMovement, TransitionMovement } from '../types';
+import type { CanvasObject, RotationMovement, TransitionMovement, SlideMovement } from '../types';
 import {
   LEVER_ROW_H,
   DEFAULT_LEVER_LENGTH,
@@ -20,7 +20,7 @@ const HANDLE_W_BASE = 28;
 // ── lever area height = only slide objects get rows above canvas ──
 
 export function getLeverAreaH(objects: CanvasObject[]): number {
-  return objects.filter(o => o.movement?.type === 'slide').length * LEVER_ROW_H;
+  return 0;
 }
 
 // ── rotation / slide helpers ──────────────────────────────────────────────────
@@ -220,7 +220,7 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
   const transObjs = objects.filter(o => o.movement?.type === 'transition');
   const rotObjs = objects.filter(o => o.movement?.type === 'rotation');
 
-  const totalLeverH = rowObjs.length * LEVER_ROW_H;
+  const totalLeverH = 0;
 
   const transPad = transObjs.reduce((maxPad, obj) => {
     const dims = getTransitionDims(obj, totalLeverH, canvasW, canvasH);
@@ -232,11 +232,20 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
     return Math.max(maxPad, dims.leverLength + dims.rodWidth + 24);
   }, DEFAULT_LEVER_LENGTH + DEFAULT_LEVER_WIDTH + 24);
 
+  const slidePad = { top: 0, left: 0, right: 0, bottom: 0 };
+  rowObjs.forEach(obj => {
+    const m = obj.movement as SlideMovement;
+    if (m.pullDirection === 'up')    slidePad.top    = TAB_THICK + 8;
+    if (m.pullDirection === 'down')  slidePad.bottom = TAB_THICK + 8;
+    if (m.pullDirection === 'left')  slidePad.left   = TAB_THICK + 8;
+    if (m.pullDirection === 'right') slidePad.right  = TAB_THICK + 8;
+  });
+
   const pad = Math.max(transPad, rotPad);
-  const padTop = pad;
-  const padLeft = pad;
-  const padRight = pad;
-  const padBottom = pad;
+  const padTop    = pad + slidePad.top;
+  const padLeft   = pad + slidePad.left;
+  const padRight  = pad + slidePad.right;
+  const padBottom = pad + slidePad.bottom;
 
   const overlayW = canvasW + padLeft + padRight;
   const overlayH = totalLeverH + canvasH + padTop + padBottom;
@@ -262,38 +271,6 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
           overflow: 'visible',
         }}
       >
-        {rowObjs.map((obj, i) => {
-          const t = sliderValues[obj.id] ?? 0;
-          const hcx = handleCX(obj, t, canvasW);
-          const rowBottom = (i + 1) * LEVER_ROW_H;
-          const targetX = obj.position.x;
-          const targetY = obj.position.y + totalLeverH;
-
-          return (
-            <g key={obj.id}>
-              <line
-                x1={padLeft + hcx}
-                y1={padTop + rowBottom}
-                x2={padLeft + targetX}
-                y2={padTop + targetY}
-                stroke="#111"
-                strokeWidth="1"
-              />
-              <circle cx={padLeft + targetX} cy={padTop + targetY} r={3} fill="#111" />
-              <text
-                x={padLeft + hcx}
-                y={padTop + i * LEVER_ROW_H + 12}
-                textAnchor="middle"
-                fontSize="9"
-                fontFamily="-apple-system, sans-serif"
-                fill="#555"
-                style={{ userSelect: 'none' }}
-              >
-                slide
-              </text>
-            </g>
-          );
-        })}
 
         {/* Rotation levers: clock-hand style, same look as translation */}
         {rotObjs.map(obj => {
@@ -410,8 +387,28 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
         })}
       </svg>
 
+      {/* ── Slide tab handles — live on the canvas edge, drag in pull direction ── */}
+      {rowObjs.map(obj => {
+        const t = sliderValues[obj.id] ?? 0;
+        return (
+          <SlideTabHandle
+            key={obj.id}
+            obj={obj}
+            movement={obj.movement as SlideMovement}
+            t={t}
+            canvasW={canvasW}
+            canvasH={canvasH}
+            totalLeverH={totalLeverH}
+            padLeft={padLeft}
+            padTop={padTop}
+            onChange={val => onChange(obj.id, val)}
+          />
+        );
+      })}
+      
+
       {/* ── Row lever handles (rotation / slide) ────────────────────────────── */}
-      {rowObjs.map((obj, i) => {
+      {/* {rowObjs.map((obj, i) => {
         const t = sliderValues[obj.id] ?? 0;
         const hcx = handleCX(obj, t, canvasW);
         const hW = handleWidth(obj);
@@ -429,7 +426,7 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
             onChange={val => onChange(obj.id, val)}
           />
         );
-      })}
+      })} */}
 
       {/* ── Translation lever hit area: drag the exposed rod itself ─────────── */}
       {transObjs.map(obj => {
@@ -470,7 +467,110 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
   );
 }
 
-// ── Rotation / Slide lever handle ─────────────────────────────────────────────
+// ── Slide tab handle ──────────────────────────────────────────────────────────
+// Sits on the canvas edge matching pullDirection, drags along that axis.
+// Moving the tab in the pull direction increases t (0 → 1).
+
+const TAB_THICK = 64;
+const TAB_LONG  = 64;
+
+interface SlideTabProps {
+  obj: CanvasObject;
+  movement: SlideMovement;
+  t: number;
+  canvasW: number;
+  canvasH: number;
+  totalLeverH: number;
+  padLeft: number;
+  padTop: number;
+  onChange: (v: number) => void;
+}
+
+function SlideTabHandle({ obj, movement, t, canvasW, canvasH, totalLeverH, padLeft, padTop, onChange }: SlideTabProps) {
+  const drag = useRef<{ startPx: number; startT: number } | null>(null);
+  const { pullDirection, range } = movement;
+  const isVertical = pullDirection === 'up' || pullDirection === 'down';
+  const travelDist = Math.abs(range);
+
+  const winX = obj.position.x - obj.width / 2;
+  const winY = obj.position.y - obj.height / 2;
+
+  let tabLeft: number;
+  let tabTop: number;
+
+  // Tab grows as t increases — shows how much strip has been pulled out
+  const minSize = TAB_THICK;
+  const maxSize = isVertical ? obj.height : obj.width;
+  const currentSize = minSize + (maxSize - minSize) * t;
+
+  const tabWidth  = isVertical ? obj.width : currentSize;
+  const tabHeight = isVertical ? currentSize : obj.height;
+
+  if (pullDirection === 'down') {
+    tabLeft = padLeft + winX;
+    tabTop  = padTop + canvasH;
+  } else if (pullDirection === 'up') {
+    tabLeft = padLeft + winX;
+    tabTop  = padTop - currentSize;  // grows upward
+  } else if (pullDirection === 'right') {
+    tabLeft = padLeft + canvasW;
+    tabTop  = padTop + winY;
+  } else { // left
+    tabLeft = padLeft - currentSize;  // grows leftward
+    tabTop  = padTop + winY;
+  }
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    drag.current = { startPx: isVertical ? e.clientY : e.clientX, startT: t };
+
+    const onMove = (me: MouseEvent) => {
+      if (!drag.current) return;
+      const delta = isVertical
+        ? me.clientY - drag.current.startPx
+        : me.clientX - drag.current.startPx;
+
+      let deltaT: number;
+      if      (pullDirection === 'down')  deltaT = delta / travelDist;
+      else if (pullDirection === 'up')    deltaT = -delta / travelDist;
+      else if (pullDirection === 'right') deltaT = delta / travelDist;
+      else                                deltaT =  -delta / travelDist;
+
+      onChange(Math.max(0, Math.min(1, drag.current.startT + deltaT)));
+    };
+
+    const onUp = () => {
+      drag.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  return (
+    <div
+      className="lever-handle slide-tab"
+      style={{
+        position: 'absolute',
+        left: tabLeft,
+        top: tabTop,
+        width: tabWidth,
+        height: tabHeight,
+        cursor: isVertical ? 'ns-resize' : 'ew-resize',
+        zIndex: 10,
+        pointerEvents: 'all',
+        // Make it visible for debugging — remove background once working
+        background: 'rgba(255, 200, 0, 0.5)',
+        borderRadius: 4,
+      }}
+      onMouseDown={onMouseDown}
+    />
+  );
+}
+
+// ── Rotation / translation lever handle ─────────────────────────────────────────────
 
 interface HandleProps {
   left: number;

@@ -19,8 +19,16 @@ export interface RotationMovement {
 
 export interface SlideMovement {
   type: 'slide';
+  // axis of movement
   direction: 'horizontal' | 'vertical';
+  // which edge the tab starts off-canvas from (the direction the user pulls toward)
+  pullDirection: 'up' | 'down' | 'left' | 'right';
+  // full canvas dimension along the movement axis, signed:
+  //   pull=down/right → negative (strip starts below/right, moves toward 0)
+  //   pull=up/left    → positive (strip starts above/left, moves away from 0)
   range: number;
+  // ID of the "after" image object
+  secondObjectId: string;
 }
 
 export type Movement = TransitionMovement | RotationMovement | SlideMovement;

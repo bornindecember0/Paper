@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react';
 import { CanvasArea, CANVAS_W, CANVAS_H } from './components/CanvasArea';
 import { RightPanel } from './components/RightPanel';
-import { SlideModal } from './components/SlideModal';
+import { SlideModal, pullDirectionToAxis, pullDirectionToRangeSign } from './components/SlideModal';
+import type { PullDirection } from './components/SlideModal';
 import { CropModal } from './components/CropModal';
 import { PlayOverlay, getLeverAreaH } from './components/PlayOverlay';
 import type { CanvasObject, Position } from './types';
@@ -135,26 +136,29 @@ export default function App() {
   }, [selectedId, rotationDegrees, rotationClockwise]);
 
   const handleSlideConfirm = useCallback((
-    startPoint: Position, endPoint: Position,
-    firstObjectId: string, _secondObjectId: string,
+    pullDirection: PullDirection,
+    beforeObjectId: string,
+    afterObjectId: string,
   ) => {
-    if (!firstObjectId) return;
+    if (!beforeObjectId || !afterObjectId) return;
+    const axis = pullDirectionToAxis(pullDirection);
+    const sign = pullDirectionToRangeSign(pullDirection);
+    const range = sign * (axis === 'vertical' ? CANVAS_H : CANVAS_W);
     setObjects(prev => prev.map(o =>
-      o.id === firstObjectId
+      o.id === beforeObjectId
         ? {
             ...o,
             movement: {
               type: 'slide',
-              direction: Math.abs(endPoint.x - startPoint.x) >= Math.abs(endPoint.y - startPoint.y)
-                ? 'horizontal' : 'vertical',
-              range: Math.abs(endPoint.x - startPoint.x) >= Math.abs(endPoint.y - startPoint.y)
-                ? endPoint.x - startPoint.x
-                : endPoint.y - startPoint.y,
+              direction: axis,
+              pullDirection,
+              range,
+              secondObjectId: afterObjectId,
             },
           }
         : o,
     ));
-    setSelectedId(firstObjectId);
+    setSelectedId(beforeObjectId);
     setDialog(null);
   }, []);
 

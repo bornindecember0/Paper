@@ -204,6 +204,12 @@ function drawCollisionZone(ctx: CanvasRenderingContext2D, obj: CanvasObject, cw:
     ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.rect(rx, ry, rw, rh);
     ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+    // Highlight the window (before image position)
+    ctx.strokeStyle = 'rgba(80,80,200,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(pos.x - w / 2, pos.y - h / 2, w, h);
+    ctx.setLineDash([]);
   }
 
   ctx.restore();
@@ -349,26 +355,103 @@ export function CanvasArea({
           ctx.stroke();
         }
         if (m.type === 'slide') {
-          const { direction, range } = m;
-          const { position: pos, width: w, height: h } = obj;
-          const rx = direction === 'vertical' ? pos.x - w / 2 : 0;
-          const ry = direction === 'horizontal' ? pos.y - h / 2 : 0;
-          const rw = direction === 'vertical' ? w : CANVAS_W;
-          const rh = direction === 'horizontal' ? h : CANVAS_H;
-          ctx.fillStyle = 'rgba(90,90,90,0.10)';
-          ctx.strokeStyle = '#5a5a5a';
-          ctx.lineWidth = 1;
-          ctx.setLineDash([4, 3]);
-          ctx.fillRect(rx, ry, rw, rh);
-          ctx.strokeRect(rx, ry, rw, rh);
-          ctx.setLineDash([]);
-          // End-of-range marker
-          const ex = direction === 'horizontal' ? pos.x + range : pos.x;
-          const ey = direction === 'vertical' ? pos.y + range : pos.y;
-          ctx.fillStyle = '#5a5a5a';
-          ctx.beginPath();
-          ctx.arc(ex, ey, 4, 0, Math.PI * 2);
-          ctx.fill();
+          const { direction, pullDirection, range, secondObjectId } = m;
+          const { position: beforePos, width: imgW, height: imgH } = obj;
+          const t = sliderValues[obj.id] ?? 0;
+
+          const winX = beforePos.x - imgW / 2;
+          const winY = beforePos.y - imgH / 2;
+
+          const afterObj = objects.find(o => o.id === secondObjectId);
+
+          // ── BOTTOM LAYER: slider strip ──────────────────────────────────
+          // Two image cells placed end-to-end along the movement axis.
+          // Each cell has the background region painted first, then the image.
+
+          let stripX: number;
+          let stripY: number;
+
+          if (direction === 'vertical') {
+            stripX = winX;
+            if (pullDirection === 'down') {
+              // at t=0 strip is below; at t=1 before-cell sits over window
+              // before-cell is first, so strip top = winY when t=1
+              // stripY + 0*imgH = winY at t=1 → stripY = winY - (1-t)*CANVAS_H
+              stripY = winY + (t - 1) * CANVAS_H;
+            } else {
+              // pull=up: at t=0 strip is above; at t=1 before-cell (second) sits over window
+              // strip has after then before, so before is at stripY+imgH
+              // stripY + imgH = winY at t=1 → stripY = winY - imgH + t * CANVAS_H - CANVAS_H
+              stripY = winY - imgH + (1 - t) * CANVAS_H;
+            }
+          } else {
+            stripY = winY;
+            if (pullDirection === 'right') {
+              stripX = winX + (t - 1) * CANVAS_W;
+            } else {
+              stripX = winX - imgW + (1 - t) * CANVAS_W;
+            }
+          }
+
+          type Cell = { imgUrl: string | null; cellX: number; cellY: number };
+          const cells: Cell[] = [];
+
+          if (direction === 'vertical') {
+            if (pullDirection === 'down') {
+              cells.push({ imgUrl: afterObj?.imageUrl ?? null, cellX: stripX, cellY: stripY });
+              cells.push({ imgUrl: obj.imageUrl, cellX: stripX, cellY: stripY + imgH });
+            } else {
+              cells.push({ imgUrl: afterObj?.imageUrl ?? null, cellX: stripX, cellY: stripY });
+              cells.push({ imgUrl: obj.imageUrl, cellX: stripX, cellY: stripY - imgH });
+              
+            }
+          } else {
+            if (pullDirection === 'right') {
+              cells.push({ imgUrl: afterObj?.imageUrl ?? null, cellX: stripX, cellY: stripY });
+              cells.push({ imgUrl: obj.imageUrl, cellX: stripX + imgW, cellY: stripY });
+            } else {
+              cells.push({ imgUrl: afterObj?.imageUrl ?? null, cellX: stripX, cellY: stripY });
+              cells.push({ imgUrl: obj.imageUrl, cellX: stripX - imgW, cellY: stripY });
+            }
+          }
+
+          const bgImg = background ? imageCache.current[background] : null;
+
+          cells.forEach(({ imgUrl, cellX, cellY }) => {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(cellX, cellY, imgW, imgH);
+            ctx.clip();
+            if (bgImg) {
+              const scaleX = bgImg.naturalWidth / CANVAS_W;
+              const scaleY = bgImg.naturalHeight / CANVAS_H;
+              ctx.drawImage(bgImg,
+                winX * scaleX, winY * scaleY, imgW * scaleX, imgH * scaleY,
+                cellX, cellY, imgW, imgH,
+              );
+            } else {
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(cellX, cellY, imgW, imgH);
+            }
+            if (imgUrl && imageCache.current[imgUrl]) {
+              ctx.drawImage(imageCache.current[imgUrl], cellX, cellY, imgW, imgH);
+            }
+            ctx.restore();
+          });
+
+          // ── TOP LAYER: background with cut-out window ───────────────────
+          if (bgImg) {
+            const off = document.createElement('canvas');
+            off.width = CANVAS_W;
+            off.height = CANVAS_H;
+            const offCtx = off.getContext('2d')!;
+            offCtx.drawImage(bgImg, 0, 0, CANVAS_W, CANVAS_H);
+            offCtx.globalCompositeOperation = 'destination-out';
+            offCtx.fillStyle = 'rgba(0,0,0,1)';
+            offCtx.fillRect(winX, winY, imgW, imgH);
+            offCtx.globalCompositeOperation = 'source-over';
+            ctx.drawImage(off, 0, 0);
+          }
         }
         ctx.restore();
       });
@@ -380,6 +463,16 @@ export function CanvasArea({
       if (!imgEl) return;
       const t = isPlayMode ? (sliderValues[obj.id] ?? 0) : 0;
       const { cx, cy, angleDeg, pivot } = getAnimatedState(obj, t);
+
+      // Slide objects are fully composited by the strip renderer above
+      if (isPlayMode && obj.movement?.type === 'slide') return;
+      // Skip the "after" object of any slide (it lives on the strip too)
+      if (isPlayMode) {
+        const isAfterObj = objects.some(
+          o => o.movement?.type === 'slide' && o.movement.secondObjectId === obj.id,
+        );
+        if (isAfterObj) return;
+      }
 
       ctx.save();
       ctx.translate(cx, cy);

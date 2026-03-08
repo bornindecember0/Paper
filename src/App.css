@@ -122,6 +122,12 @@ body {
 }
 .lever-handle:active { cursor: grabbing; background: var(--paper); }
 
+/* Slide tab — sits on the canvas edge, moves with the strip */
+.slide-tab {
+  border-radius: 3px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+}
+
 /* ── Right panel ───────────────────────────────────────────────────────────── */
 .right-panel {
   width: 240px;
