@@ -14,36 +14,10 @@ import {
 
 export { LEVER_ROW_H };
 
-const HANDLE_H = 100;
-const HANDLE_W_BASE = 28;
-
 // ── lever area height = only slide objects get rows above canvas ──
 
-export function getLeverAreaH(objects: CanvasObject[]): number {
+export function getLeverAreaH(_objects: CanvasObject[]): number {
   return 0;
-}
-
-// ── rotation / slide helpers ──────────────────────────────────────────────────
-
-function handleWidth(obj: CanvasObject): number {
-  return obj.movement?.type === 'slide' ? obj.width : HANDLE_W_BASE;
-}
-
-function handleCX(obj: CanvasObject, t: number, canvasW: number): number {
-  const m = obj.movement;
-  if (m?.type === 'slide' && m.direction === 'horizontal') {
-    return obj.position.x + m.range * t;
-  }
-  return t * canvasW;
-}
-
-function nextT(obj: CanvasObject, deltaX: number, startT: number, canvasW: number): number {
-  const m = obj.movement;
-  let range = canvasW;
-  if (m?.type === 'slide' && m.direction === 'horizontal') {
-    range = Math.abs(m.range) || 1;
-  }
-  return Math.max(0, Math.min(1, startT + deltaX / range));
 }
 
 // ── transition / rotation lever geometry (visible segment; dims from leverGeometry) ─
@@ -398,7 +372,6 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
             t={t}
             canvasW={canvasW}
             canvasH={canvasH}
-            totalLeverH={totalLeverH}
             padLeft={padLeft}
             padTop={padTop}
             onChange={val => onChange(obj.id, val)}
@@ -406,27 +379,6 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
         );
       })}
       
-
-      {/* ── Row lever handles (rotation / slide) ────────────────────────────── */}
-      {/* {rowObjs.map((obj, i) => {
-        const t = sliderValues[obj.id] ?? 0;
-        const hcx = handleCX(obj, t, canvasW);
-        const hW = handleWidth(obj);
-
-        return (
-          <LeverHandle
-            key={obj.id}
-            left={padLeft + hcx - hW / 2}
-            top={padTop + i * LEVER_ROW_H}
-            width={hW}
-            height={HANDLE_H}
-            value={t}
-            obj={obj}
-            canvasW={canvasW}
-            onChange={val => onChange(obj.id, val)}
-          />
-        );
-      })} */}
 
       {/* ── Translation lever hit area: drag the exposed rod itself ─────────── */}
       {transObjs.map(obj => {
@@ -472,7 +424,6 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
 // Moving the tab in the pull direction increases t (0 → 1).
 
 const TAB_THICK = 64;
-const TAB_LONG  = 64;
 
 interface SlideTabProps {
   obj: CanvasObject;
@@ -480,13 +431,12 @@ interface SlideTabProps {
   t: number;
   canvasW: number;
   canvasH: number;
-  totalLeverH: number;
   padLeft: number;
   padTop: number;
   onChange: (v: number) => void;
 }
 
-function SlideTabHandle({ obj, movement, t, canvasW, canvasH, totalLeverH, padLeft, padTop, onChange }: SlideTabProps) {
+function SlideTabHandle({ obj, movement, t, canvasW, canvasH, padLeft, padTop, onChange }: SlideTabProps) {
   const drag = useRef<{ startPx: number; startT: number } | null>(null);
   const { pullDirection, range } = movement;
   const isVertical = pullDirection === 'up' || pullDirection === 'down';
@@ -559,56 +509,11 @@ function SlideTabHandle({ obj, movement, t, canvasW, canvasH, totalLeverH, padLe
         width: tabWidth,
         height: tabHeight,
         cursor: isVertical ? 'ns-resize' : 'ew-resize',
-        zIndex: 10,
         pointerEvents: 'all',
         // Make it visible for debugging — remove background once working
         background: 'rgba(255, 200, 0, 0.5)',
         borderRadius: 4,
       }}
-      onMouseDown={onMouseDown}
-    />
-  );
-}
-
-// ── Rotation / translation lever handle ─────────────────────────────────────────────
-
-interface HandleProps {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-  value: number;
-  obj: CanvasObject;
-  canvasW: number;
-  onChange: (v: number) => void;
-}
-
-function LeverHandle({ left, top, width, height, value, obj, canvasW, onChange }: HandleProps) {
-  const drag = useRef<{ startX: number; startT: number } | null>(null);
-
-  const onMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    drag.current = { startX: e.clientX, startT: value };
-
-    const onMove = (me: MouseEvent) => {
-      if (!drag.current) return;
-      onChange(nextT(obj, me.clientX - drag.current.startX, drag.current.startT, canvasW));
-    };
-
-    const onUp = () => {
-      drag.current = null;
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
-  return (
-    <div
-      className="lever-handle"
-      style={{ position: 'absolute', left, top, width, height }}
       onMouseDown={onMouseDown}
     />
   );

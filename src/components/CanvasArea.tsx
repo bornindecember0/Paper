@@ -259,6 +259,8 @@ function drawCornerHandles(ctx: CanvasRenderingContext2D, obj: CanvasObject) {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+export type CanvasLayer = 'background' | 'path' | 'objects' | 'full';
+
 interface Props {
   background: string | null;
   objects: CanvasObject[];
@@ -267,6 +269,8 @@ interface Props {
   pickingEndPoint: boolean;
   pickingAnchor: boolean;
   sliderValues: Record<string, number>;
+  /** When 'background': bg+strip only. When 'path': translation path only (above lever, below object). When 'objects': objects + anchor dots. When 'full': single canvas. */
+  layer?: CanvasLayer;
   onObjectSelect: (id: string | null) => void;
   onObjectMove: (id: string, pos: Position) => void;
   onObjectResize: (id: string, width: number, height: number, position: Position) => void;
@@ -276,7 +280,7 @@ interface Props {
 
 export function CanvasArea({
   background, objects, selectedId, isPlayMode, pickingEndPoint, pickingAnchor,
-  sliderValues, onObjectSelect, onObjectMove, onObjectResize, onEndPointPick, onAnchorPick,
+  sliderValues, layer = 'full', onObjectSelect, onObjectMove, onObjectResize, onEndPointPick, onAnchorPick,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageCache = useRef<Record<string, HTMLImageElement>>({});
@@ -311,7 +315,79 @@ export function CanvasArea({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // White fill
+    // Path-only layer: translation gray rail above lever, below object
+    if (layer === 'path') {
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      objects.forEach(obj => {
+        const m = obj.movement;
+        if (m?.type !== 'transition') return;
+        ctx.save();
+        ctx.strokeStyle = '#5a5a5a';
+        ctx.lineWidth = 10;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(obj.position.x, obj.position.y);
+        ctx.lineTo(m.endPoint.x, m.endPoint.y);
+        ctx.stroke();
+        ctx.restore();
+      });
+      return;
+    }
+
+    // Objects-only layer: clear to transparent, draw objects, then anchor dots on top
+    if (layer === 'objects') {
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      objects.forEach(obj => {
+        const imgEl = imageCache.current[obj.imageUrl];
+        if (!imgEl) return;
+        const t = isPlayMode ? (sliderValues[obj.id] ?? 0) : 0;
+        const { cx, cy, angleDeg, pivot } = getAnimatedState(obj, t);
+        if (obj.movement?.type === 'slide') return;
+        const isAfterObj = objects.some(
+          o => o.movement?.type === 'slide' && o.movement.secondObjectId === obj.id,
+        );
+        if (isAfterObj) return;
+        ctx.save();
+        ctx.translate(cx, cy);
+        if (angleDeg !== 0 && pivot) {
+          const anchorRel = { x: pivot.x - cx, y: pivot.y - cy };
+          ctx.translate(anchorRel.x, anchorRel.y);
+          ctx.rotate((angleDeg * Math.PI) / 180);
+          ctx.translate(-anchorRel.x, -anchorRel.y);
+        }
+        ctx.drawImage(imgEl, -obj.width / 2, -obj.height / 2, obj.width, obj.height);
+        ctx.restore();
+      });
+      // Draw anchor dots and translation path on top so they're always visible
+      objects.forEach(obj => {
+        const m = obj.movement;
+        if (!m) return;
+        const t = sliderValues[obj.id] ?? 0;
+        if (m.type === 'rotation') {
+          const anchor = getRotationAnchor(obj);
+          ctx.save();
+          ctx.fillStyle = '#111';
+          ctx.beginPath();
+          ctx.arc(anchor.x, anchor.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        if (m.type === 'transition') {
+          // Pivot dot at current position (path is drawn in background layer, below object)
+          const cx = obj.position.x + (m.endPoint.x - obj.position.x) * t;
+          const cy = obj.position.y + (m.endPoint.y - obj.position.y) * t;
+          ctx.save();
+          ctx.fillStyle = '#111';
+          ctx.beginPath();
+          ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      });
+      return;
+    }
+
+    // White fill (background layer or full)
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
@@ -341,14 +417,14 @@ export function CanvasArea({
       });
     }
 
-    // Play mode: draw track bars BEFORE objects so objects render on top
+    // Play mode: draw track bars (slide strip only here; transition path is on 'path' layer above lever)
     if (isPlayMode) {
       objects.forEach(obj => {
         const m = obj.movement;
         if (!m) return;
         ctx.save();
-        if (m.type === 'transition') {
-          // Gray rounded rail from start to end of path
+        if (m.type === 'transition' && layer !== 'background') {
+          // In full canvas mode: gray rail here. When layered, transition path is drawn on 'path' layer.
           ctx.strokeStyle = '#5a5a5a';
           ctx.lineWidth = 10;
           ctx.lineCap = 'round';
@@ -358,7 +434,7 @@ export function CanvasArea({
           ctx.stroke();
         }
         if (m.type === 'slide') {
-          const { direction, pullDirection, range, secondObjectId } = m;
+          const { direction, pullDirection, secondObjectId } = m;
           const { position: beforePos, width: imgW, height: imgH } = obj;
           const t = sliderValues[obj.id] ?? 0;
 
@@ -460,7 +536,12 @@ export function CanvasArea({
       });
     }
 
-    // Draw objects
+    // Draw objects (skip for background layer — objects go on separate layer above lever)
+    if (layer === 'background') {
+      // Design-mode-only overlays (arrows, picking, etc.) are not drawn in background layer
+      return;
+    }
+
     objects.forEach(obj => {
       const imgEl = imageCache.current[obj.imageUrl];
       if (!imgEl) return;
@@ -524,7 +605,7 @@ export function CanvasArea({
       ctx.setLineDash([]);
       ctx.restore();
     }
-  }, [background, objects, selectedId, isPlayMode, pickingEndPoint, pickingAnchor, sliderValues, redrawTrigger]);
+  }, [background, objects, selectedId, isPlayMode, pickingEndPoint, pickingAnchor, sliderValues, redrawTrigger, layer]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -638,7 +719,11 @@ export function CanvasArea({
       ref={canvasRef}
       width={CANVAS_W}
       height={CANVAS_H}
-      style={{ cursor, display: 'block' }}
+      style={{
+        cursor,
+        display: 'block',
+        pointerEvents: (layer === 'objects' || layer === 'path') ? 'none' : 'auto',
+      }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}

@@ -87,7 +87,12 @@ export default function App() {
       };
       img.src = croppedUrl;
     }
-    URL.revokeObjectURL(pendingCrop.url);
+    // Only revoke the original pending crop URL if it's different from the final one.
+    // When the user chooses "Use Full Image", croppedUrl === pendingCrop.url and revoking
+    // it would break the image rendering on the canvas.
+    if (croppedUrl !== pendingCrop.url) {
+      URL.revokeObjectURL(pendingCrop.url);
+    }
     setPendingCrop(null);
   }, [pendingCrop, background]);
 
@@ -259,35 +264,92 @@ export default function App() {
           </div>
         )}
 
-        {/* Canvas + levers */}
+        {/* Canvas + levers — layer order: background (0) < lever (1) < object (2) */}
         <div
           className="canvas-play-wrapper"
           style={tab === 'play' && leverAreaH > 0 ? { marginTop: leverAreaH } : undefined}
         >
-          {tab === 'play' && objectsWithMovement.length > 0 && (
-            <PlayOverlay
-              objects={objectsWithMovement}
-              sliderValues={sliderValues}
-              canvasW={CANVAS_W}
-              canvasH={CANVAS_H}
-              onChange={handleSliderChange}
-            />
-          )}
-          <div className="canvas-container">
-            <CanvasArea
-              background={background}
-              objects={objects}
-              selectedId={tab === 'design' ? selectedId : null}
-              isPlayMode={tab === 'play'}
-              pickingEndPoint={pickingEndPoint}
-              pickingAnchor={pickingAnchor}
-              sliderValues={sliderValues}
-              onObjectSelect={id => { if (tab === 'design') setSelectedId(id); }}
-              onObjectMove={handleObjectMove}
-              onObjectResize={handleObjectResize}
-              onEndPointPick={handleEndPointPick}
-              onAnchorPick={handleAnchorPick}
-            />
+          <div
+            className="canvas-container"
+            style={tab === 'play' && objectsWithMovement.length > 0 ? { width: CANVAS_W, height: CANVAS_H } : undefined}
+          >
+            {tab === 'play' && objectsWithMovement.length > 0 ? (
+              <>
+                <div className="canvas-layer canvas-layer-bg" style={{ zIndex: 0 }}>
+                  <CanvasArea
+                    layer="background"
+                    background={background}
+                    objects={objects}
+                    selectedId={null}
+                    isPlayMode={true}
+                    pickingEndPoint={false}
+                    pickingAnchor={false}
+                    sliderValues={sliderValues}
+                    onObjectSelect={() => {}}
+                    onObjectMove={handleObjectMove}
+                    onObjectResize={handleObjectResize}
+                    onEndPointPick={handleEndPointPick}
+                    onAnchorPick={handleAnchorPick}
+                  />
+                </div>
+                <PlayOverlay
+                  objects={objectsWithMovement}
+                  sliderValues={sliderValues}
+                  canvasW={CANVAS_W}
+                  canvasH={CANVAS_H}
+                  onChange={handleSliderChange}
+                />
+                <div className="canvas-layer canvas-layer-path" style={{ zIndex: 2 }}>
+                  <CanvasArea
+                    layer="path"
+                    background={background}
+                    objects={objects}
+                    selectedId={null}
+                    isPlayMode={true}
+                    pickingEndPoint={false}
+                    pickingAnchor={false}
+                    sliderValues={sliderValues}
+                    onObjectSelect={() => {}}
+                    onObjectMove={handleObjectMove}
+                    onObjectResize={handleObjectResize}
+                    onEndPointPick={handleEndPointPick}
+                    onAnchorPick={handleAnchorPick}
+                  />
+                </div>
+                <div className="canvas-layer canvas-layer-objects" style={{ zIndex: 3 }}>
+                  <CanvasArea
+                    layer="objects"
+                    background={background}
+                    objects={objects}
+                    selectedId={null}
+                    isPlayMode={true}
+                    pickingEndPoint={false}
+                    pickingAnchor={false}
+                    sliderValues={sliderValues}
+                    onObjectSelect={() => {}}
+                    onObjectMove={handleObjectMove}
+                    onObjectResize={handleObjectResize}
+                    onEndPointPick={handleEndPointPick}
+                    onAnchorPick={handleAnchorPick}
+                  />
+                </div>
+              </>
+            ) : (
+              <CanvasArea
+                background={background}
+                objects={objects}
+                selectedId={selectedId}
+                isPlayMode={tab === 'play'}
+                pickingEndPoint={pickingEndPoint}
+                pickingAnchor={pickingAnchor}
+                sliderValues={sliderValues}
+                onObjectSelect={id => { if (tab === 'design') setSelectedId(id); }}
+                onObjectMove={handleObjectMove}
+                onObjectResize={handleObjectResize}
+                onEndPointPick={handleEndPointPick}
+                onAnchorPick={handleAnchorPick}
+              />
+            )}
           </div>
         </div>
       </div>

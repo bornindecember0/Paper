@@ -96,15 +96,24 @@ body {
   border-radius: var(--radius);
   background: var(--white);
   position: relative;
-  z-index: 1;
   box-shadow: var(--shadow-sm);
 }
+
+/* Layer order: background (0) < lever (1) < object (2) */
+.canvas-layer {
+  position: absolute;
+  inset: 0;
+  line-height: 0;
+}
+.canvas-layer-bg { z-index: 0; }
+.canvas-layer-path { z-index: 2; }   /* translation path: above lever, below object */
+.canvas-layer-objects { z-index: 3; }
 
 /* ── Lever overlay ─────────────────────────────────────────────────────────── */
 .play-overlay {
   position: absolute;
   left: 0;
-  z-index: 2;           /* above canvas so lever is visible (e.g. with transparent bg) */
+  z-index: 1;           /* between background and object layers */
   pointer-events: none;
 }
 
