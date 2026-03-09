@@ -9,7 +9,7 @@ interface Props {
 }
 
 const MAX_W = 560;
-const MAX_H = 420;
+const MAX_H = 400;
 
 export function CropModal({ imageUrl, onSave, onSkip }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);

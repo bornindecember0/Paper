@@ -99,7 +99,7 @@ export function SlideModal({ objects, selectedId, onConfirm, onCancel }: Props) 
 
 function SliderDiagram({ direction }: { direction: PullDirection }) {
   const isVertical = pullDirectionToAxis(direction) === 'vertical';
-  const canvasW = 120; const canvasH = 80;
+  const canvasW = 150; const canvasH = 120;
   const stripColor = '#7bb6d4'; const bgColor = '#d4d4d4'; const tabColor = '#a0c8e8';
   const windowW = isVertical ? 50 : canvasW;
   const windowH = isVertical ? canvasH : 40;
@@ -130,21 +130,21 @@ function SliderDiagram({ direction }: { direction: PullDirection }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '8px 0' }}>
-      <p style={{ fontSize: 11, color: '#666', margin: '0 0 6px' }}>Slider construction diagram</p>
+      <p style={{ fontSize: 16, color: '#666', margin: '0 0 10px' }}>Slider construction diagram</p>
       <svg width={totalW + 4} height={totalH + 4} style={{ overflow: 'visible' }}
         viewBox={`${-offsetX - 2} ${-offsetY - 2} ${totalW + 4} ${totalH + 4}`}>
         <rect x={0} y={0} width={canvasW} height={canvasH} fill={bgColor} stroke="#999" strokeWidth={1} />
         <rect x={winX} y={winY} width={windowW} height={windowH} fill={stripColor} stroke="#5a9fc0" strokeWidth={1} />
         {isVertical ? (
           <>
-            <text x={winX + windowW / 2} y={winY + windowH * 0.28} textAnchor="middle" fontSize={8} fill="#fff">{direction === 'down' ? 'After' : 'Before'}</text>
-            <text x={winX + windowW / 2} y={winY + windowH * 0.72} textAnchor="middle" fontSize={8} fill="#fff">{direction === 'down' ? 'Before' : 'After'}</text>
+            <text x={winX + windowW / 2} y={winY + windowH * 0.28} textAnchor="middle" fontSize={12} fill="#fff">{direction === 'down' ? 'After' : 'Before'}</text>
+            <text x={winX + windowW / 2} y={winY + windowH * 0.72} textAnchor="middle" fontSize={12} fill="#fff">{direction === 'down' ? 'Before' : 'After'}</text>
             <line x1={winX} y1={winY + windowH / 2} x2={winX + windowW} y2={winY + windowH / 2} stroke="#5a9fc0" strokeWidth={1} strokeDasharray="3,2" />
           </>
         ) : (
           <>
-            <text x={winX + windowW * 0.25} y={winY + windowH / 2 + 3} textAnchor="middle" fontSize={8} fill="#fff">{direction === 'right' ? 'After' : 'Before'}</text>
-            <text x={winX + windowW * 0.75} y={winY + windowH / 2 + 3} textAnchor="middle" fontSize={8} fill="#fff">{direction === 'right' ? 'Before' : 'After'}</text>
+            <text x={winX + windowW * 0.25} y={winY + windowH / 2 + 3} textAnchor="middle" fontSize={12} fill="#fff">{direction === 'right' ? 'After' : 'Before'}</text>
+            <text x={winX + windowW * 0.75} y={winY + windowH / 2 + 3} textAnchor="middle" fontSize={12} fill="#fff">{direction === 'right' ? 'Before' : 'After'}</text>
             <line x1={winX + windowW / 2} y1={winY} x2={winX + windowW / 2} y2={winY + windowH} stroke="#5a9fc0" strokeWidth={1} strokeDasharray="3,2" />
           </>
         )}
