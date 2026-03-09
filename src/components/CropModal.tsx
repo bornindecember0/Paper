@@ -119,7 +119,7 @@ export function CropModal({ imageUrl, onSave, onSkip }: Props) {
             />
           )}
           <p className="form-note" style={{ marginTop: 8 }}>
-            Drag to select crop area · image is locked after this step
+            Drag to select crop area
           </p>
         </div>
         <div className="modal-footer">

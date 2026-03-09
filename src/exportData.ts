@@ -26,7 +26,9 @@ export interface ExportMovementRotation {
 export interface ExportMovementSlide {
   type: 'slide';
   direction: 'horizontal' | 'vertical';
+  pullDirection: 'up' | 'down' | 'left' | 'right';
   range: number;
+  secondObjectId: string;
   leverRow: true;
 }
 
@@ -103,7 +105,9 @@ export function buildExportData(
         movement: {
           type: 'slide',
           direction: movement.direction,
+          pullDirection: movement.pullDirection,
           range: movement.range,
+          secondObjectId: movement.secondObjectId,
           leverRow: true,
         },
       };
@@ -111,4 +115,92 @@ export function buildExportData(
 
     throw new Error(`Unknown movement type: ${(movement as Movement).type}`);
   });
+}
+
+/** Convert a blob URL to base64 data URL. */
+async function urlToBase64(url: string): Promise<string> {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+export interface SavePayload {
+  version: 1;
+  canvas: { width: number; height: number };
+  background: { filename: string; imageData: string } | null;
+  objects: Array<{
+    id: string;
+    filename: string;
+    position: { x: number; y: number };
+    width: number;
+    height: number;
+    movement?: ExportMovement;
+    imageData: string;
+  }>;
+}
+
+export interface SaveSceneOptions {
+  background: string | null;
+  bgFilename: string;
+  objects: CanvasObject[];
+  canvasW: number;
+  canvasH: number;
+}
+
+/**
+ * Build full save payload with base64 image data for background and all objects.
+ */
+export async function buildSavePayload(options: SaveSceneOptions): Promise<SavePayload> {
+  const { background, bgFilename, objects, canvasW, canvasH } = options;
+  const exportData = buildExportData(objects, { canvasW, canvasH });
+  const exportById = new Map(exportData.map(e => [e.id, e]));
+
+  const objectEntries = await Promise.all(
+    objects.map(async (obj) => {
+      const imageData = await urlToBase64(obj.imageUrl);
+      const exported = exportById.get(obj.id);
+      const base = {
+        id: obj.id,
+        filename: obj.filename,
+        position: { ...obj.position },
+        width: obj.width,
+        height: obj.height,
+        imageData,
+      };
+      if (exported?.movement) {
+        return { ...base, movement: exported.movement };
+      }
+      return base;
+    }),
+  );
+
+  let backgroundEntry: { filename: string; imageData: string } | null = null;
+  if (background) {
+    const imageData = await urlToBase64(background);
+    backgroundEntry = { filename: bgFilename || 'background', imageData };
+  }
+
+  return {
+    version: 1,
+    canvas: { width: canvasW, height: canvasH },
+    background: backgroundEntry,
+    objects: objectEntries,
+  };
+}
+
+/** Trigger download of save payload as JSON file. */
+export function downloadSave(payload: SavePayload, filename = 'paper-scene.json') {
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }

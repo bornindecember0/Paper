@@ -5,6 +5,7 @@ import { SlideModal, pullDirectionToAxis, pullDirectionToRangeSign } from './com
 import type { PullDirection } from './components/SlideModal';
 import { CropModal } from './components/CropModal';
 import { PlayOverlay, getLeverAreaH } from './components/PlayOverlay';
+import { buildSavePayload, downloadSave } from './exportData';
 import type { CanvasObject, Position } from './types';
 
 export type Tab = 'design' | 'play';
@@ -42,6 +43,13 @@ export default function App() {
     const url = URL.createObjectURL(file);
     setPendingCrop({ url, filename: file.name, objectId: null });
   }, []);
+
+  const handleDeleteBackground = useCallback(() => {
+    if (background) URL.revokeObjectURL(background);
+    setBackground(null);
+    setBgFilename('');
+    setBgLocked(false);
+  }, [background]);
 
   const handleObjectUpload = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
@@ -167,6 +175,22 @@ export default function App() {
     setObjects(prev => prev.map(o => o.id === selectedId ? { ...o, movement: undefined } : o));
   }, [selectedId]);
 
+  const handleDeleteObject = useCallback((id: string) => {
+    setObjects(prev => prev.filter(o => o.id !== id));
+    if (selectedId === id) setSelectedId(null);
+  }, [selectedId]);
+
+  const handleSave = useCallback(async () => {
+    const payload = await buildSavePayload({
+      background,
+      bgFilename,
+      objects,
+      canvasW: CANVAS_W,
+      canvasH: CANVAS_H,
+    });
+    downloadSave(payload);
+  }, [background, bgFilename, objects]);
+
   // ── Movement button dispatch ──────────────────────────────────────────────
 
   const handleMovementOpen = useCallback((type: 'translate' | 'rotation' | 'slide') => {
@@ -271,16 +295,18 @@ export default function App() {
       {/* ── Right panel ────────────────────────────────────────────────────── */}
       <RightPanel
         tab={tab}
-        background={background}
         bgFilename={bgFilename}
         bgLocked={bgLocked}
         objects={objects}
         selectedId={selectedId}
         onBackgroundUpload={handleBackgroundUpload}
+        onDeleteBackground={handleDeleteBackground}
         onObjectUpload={handleObjectUpload}
+        onDeleteObject={handleDeleteObject}
         onObjectSelect={setSelectedId}
         onMovementOpen={handleMovementOpen}
         onClearMovement={handleClearMovement}
+        onSave={handleSave}
         rotationConfigOpen={rotationConfigOpen}
         rotationDegrees={rotationDegrees}
         rotationClockwise={rotationClockwise}

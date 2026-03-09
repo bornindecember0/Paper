@@ -287,7 +287,7 @@ export function CanvasArea({
     startW: number; startH: number; startPos: Position;
   } | null>(null);
   const didMoveRef = useRef(false);
-  const [, redraw] = useState(0);
+  const [redrawTrigger, setRedrawTrigger] = useState(0);
 
   // Image loading
   useEffect(() => {
@@ -295,7 +295,10 @@ export function CanvasArea({
     urls.forEach(url => {
       if (!imageCache.current[url]) {
         const img = new Image();
-        img.onload = () => { imageCache.current[url] = img; redraw(n => n + 1); };
+        img.onload = () => {
+          imageCache.current[url] = img;
+          setRedrawTrigger(n => n + 1);
+        };
         img.src = url;
       }
     });
@@ -521,7 +524,7 @@ export function CanvasArea({
       ctx.setLineDash([]);
       ctx.restore();
     }
-  }, [background, objects, selectedId, isPlayMode, pickingEndPoint, pickingAnchor, sliderValues]);
+  }, [background, objects, selectedId, isPlayMode, pickingEndPoint, pickingAnchor, sliderValues, redrawTrigger]);
 
   useEffect(() => { draw(); }, [draw]);
 

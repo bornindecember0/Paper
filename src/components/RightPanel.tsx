@@ -4,16 +4,18 @@ import type { Tab } from '../App';
 
 interface Props {
   tab: Tab;
-  background: string | null;
   bgFilename: string;
   bgLocked: boolean;
   objects: CanvasObject[];
   selectedId: string | null;
   onBackgroundUpload: (file: File) => void;
+  onDeleteBackground: () => void;
   onObjectUpload: (file: File, objectId?: string) => void;
+  onDeleteObject: (id: string) => void;
   onObjectSelect: (id: string) => void;
   onMovementOpen: (type: 'translate' | 'rotation' | 'slide') => void;
   onClearMovement: () => void;
+  onSave: () => void;
   // Rotation inline config (no modal)
   rotationConfigOpen: boolean;
   rotationDegrees: number;
@@ -35,9 +37,9 @@ function movementLabel(obj: CanvasObject): string {
 }
 
 export function RightPanel({
-  tab, background, bgFilename, bgLocked, objects, selectedId,
-  onBackgroundUpload, onObjectUpload, onObjectSelect,
-  onMovementOpen, onClearMovement,
+  tab, bgFilename, bgLocked, objects, selectedId,
+  onBackgroundUpload, onDeleteBackground, onObjectUpload, onDeleteObject, onObjectSelect,
+  onMovementOpen, onClearMovement, onSave,
   rotationConfigOpen, rotationDegrees, rotationClockwise,
   onRotationDegreesChange, onRotationClockwiseChange,
   onRotationPickAnchor, onRotationCancel,
@@ -52,26 +54,45 @@ export function RightPanel({
   return (
     <aside className="right-panel">
 
+      {/* Hint */}
+      <p className="panel-hint">
+      Click <strong>+</strong> to upload images as background or moving objects.  
+      </p>
+
       {/* Background section */}
       <div className="panel-section">
         <div className="section-header">
           <span className="section-title">Background</span>
+          {!bgLocked && (
+            <>
+              <input ref={bgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files?.[0]; if (f) { onBackgroundUpload(f); e.target.value = ''; } }} />
+              <button className="btn-add" onClick={() => bgInputRef.current?.click()} title="Add background">+</button>
+            </>
+          )}
         </div>
-        <div className="image-row" style={{ borderTop: 'none' }}>
+        <div className="image-row image-row-first">
           <div className="image-row-top">
             {!bgLocked ? (
-              <>
-                <input ref={bgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
-                  onChange={e => { const f = e.target.files?.[0]; if (f) { onBackgroundUpload(f); e.target.value = ''; } }} />
-                <button className="btn-import" style={{ width: '100%' }} onClick={() => bgInputRef.current?.click()}>
-                  Import Image
-                </button>
-              </>
+              <span className="image-filename">No background added</span>
             ) : (
-              <span className="locked-label">🔒 Locked</span>
+              <>
+                <span className="image-label">Background</span>
+                {tab === 'design' && (
+                  <button
+                    type="button"
+                    className="btn-delete-object"
+                    onClick={onDeleteBackground}
+                    title="Delete background"
+                    aria-label="Delete background"
+                  >
+                    x
+                  </button>
+                )}
+              </>
             )}
           </div>
-          <span className="image-filename">{bgFilename || (background ? 'loaded' : 'No file selected')}</span>
+          {bgLocked && <span className="image-filename">{bgFilename || 'loaded'}</span>}
         </div>
       </div>
 
@@ -97,15 +118,14 @@ export function RightPanel({
         {objects.map((obj, i) => (
           <div
             key={obj.id}
-            className={`image-row ${obj.id === selectedId ? 'selected' : ''}`}
+            className={`image-row ${i === 0 ? 'image-row-first' : ''} ${obj.id === selectedId ? 'selected' : ''}`}
             onClick={() => { if (tab === 'design') onObjectSelect(obj.id); }}
             style={{ cursor: tab === 'design' ? 'pointer' : 'default' }}
           >
             <div className="image-row-top">
               <span className="image-label">Object #{i + 1}</span>
-              {obj.locked
-                ? <span className="locked-label">🔒</span>
-                : (
+              <div className="image-row-actions">
+                {!obj.locked && (
                   <>
                     <input
                       ref={el => { objInputRefs.current[obj.id] = el; }}
@@ -117,8 +137,19 @@ export function RightPanel({
                       Replace
                     </button>
                   </>
-                )
-              }
+                )}
+                {tab === 'design' && (
+                  <button
+                    type="button"
+                    className="btn-delete-object"
+                    onClick={e => { e.stopPropagation(); onDeleteObject(obj.id); }}
+                    title="Delete object"
+                    aria-label="Delete object"
+                  >
+                    x
+                  </button>
+                )}
+              </div>
             </div>
             <span className="image-filename">{obj.filename || 'No name'}</span>
           </div>
@@ -132,7 +163,7 @@ export function RightPanel({
         {selectedObject?.movement && (
           <div className="movement-badge">
             <span>{movementLabel(selectedObject)}</span>
-            <button className="btn-clear" onClick={onClearMovement} title="Remove">✕</button>
+            <button className="btn-clear" onClick={onClearMovement} title="Remove movement">✕</button>
           </div>
         )}
 
@@ -194,6 +225,14 @@ export function RightPanel({
             </div>
           </div>
         )}
+      </div>
+
+      {/* Save section */}
+      <div className="panel-section panel-section-save">
+        <button className="btn-save" onClick={onSave}>
+          save for fabrication
+        </button>
+     
       </div>
     </aside>
   );
