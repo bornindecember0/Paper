@@ -1,9 +1,11 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
+import { removeBackground } from '@imgly/background-removal';
 
 interface CropRect { x: number; y: number; w: number; h: number; }
 
 interface Props {
   imageUrl: string;
+  isObject?: boolean;
   onSave: (croppedUrl: string) => void;
   onSkip: () => void;
 }
@@ -11,13 +13,16 @@ interface Props {
 const MAX_W = 560;
 const MAX_H = 400;
 
-export function CropModal({ imageUrl, onSave, onSkip }: Props) {
+export function CropModal({ imageUrl, isObject = false, onSave, onSkip }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
   const [displayW, setDisplayW] = useState(0);
   const [displayH, setDisplayH] = useState(0);
   const [crop, setCrop] = useState<CropRect | null>(null);
   const dragRef = useRef<{ startX: number; startY: number } | null>(null);
+  const [removeBg, setRemoveBg] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState(0);
 
   useEffect(() => {
     const img = new Image();
@@ -86,21 +91,64 @@ export function CropModal({ imageUrl, onSave, onSkip }: Props) {
 
   const handleMouseUp = () => { dragRef.current = null; };
 
-  const handleSave = useCallback(() => {
+  const applyCropToBlob = useCallback((): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      if (!imgEl || !crop) return reject(new Error('No image or crop'));
+      const scaleX = imgEl.naturalWidth / displayW;
+      const scaleY = imgEl.naturalHeight / displayH;
+      const nc = {
+        x: Math.round(crop.x * scaleX),
+        y: Math.round(crop.y * scaleY),
+        w: Math.max(1, Math.round(crop.w * scaleX)),
+        h: Math.max(1, Math.round(crop.h * scaleY)),
+      };
+      const off = document.createElement('canvas');
+      off.width = nc.w; off.height = nc.h;
+      off.getContext('2d')!.drawImage(imgEl, nc.x, nc.y, nc.w, nc.h, 0, 0, nc.w, nc.h);
+      off.toBlob(blob => {
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to create blob'));
+      }, 'image/png');
+    });
+  }, [imgEl, crop, displayW, displayH]);
+
+  const handleSave = useCallback(async () => {
     if (!imgEl || !crop) return;
-    const scaleX = imgEl.naturalWidth / displayW;
-    const scaleY = imgEl.naturalHeight / displayH;
-    const nc = {
-      x: Math.round(crop.x * scaleX),
-      y: Math.round(crop.y * scaleY),
-      w: Math.max(1, Math.round(crop.w * scaleX)),
-      h: Math.max(1, Math.round(crop.h * scaleY)),
-    };
-    const off = document.createElement('canvas');
-    off.width = nc.w; off.height = nc.h;
-    off.getContext('2d')!.drawImage(imgEl, nc.x, nc.y, nc.w, nc.h, 0, 0, nc.w, nc.h);
-    off.toBlob(blob => { if (blob) onSave(URL.createObjectURL(blob)); }, 'image/png');
-  }, [imgEl, crop, displayW, displayH, onSave]);
+    setProcessing(true);
+    setProcessingProgress(0);
+    try {
+      const croppedBlob = await applyCropToBlob();
+      let finalBlob = croppedBlob;
+      if (removeBg) {
+        finalBlob = await removeBackground(croppedBlob, {
+          progress: (_key: string, current: number, total: number) => {
+            setProcessingProgress(total > 0 ? Math.round((current / total) * 100) : 0);
+          },
+        });
+      }
+      onSave(URL.createObjectURL(finalBlob));
+    } finally {
+      setProcessing(false);
+    }
+  }, [imgEl, crop, removeBg, applyCropToBlob, onSave]);
+
+  const handleSkip = useCallback(async () => {
+    if (!removeBg) { onSkip(); return; }
+    setProcessing(true);
+    setProcessingProgress(0);
+    try {
+      const res = await fetch(imageUrl);
+      const blob = await res.blob();
+      const finalBlob = await removeBackground(blob, {
+        progress: (_key: string, current: number, total: number) => {
+          setProcessingProgress(total > 0 ? Math.round((current / total) * 100) : 0);
+        },
+      });
+      onSave(URL.createObjectURL(finalBlob));
+    } finally {
+      setProcessing(false);
+    }
+  }, [removeBg, imageUrl, onSkip, onSave]);
 
   return (
     <div className="modal-backdrop">
@@ -112,19 +160,45 @@ export function CropModal({ imageUrl, onSave, onSkip }: Props) {
               ref={canvasRef}
               width={displayW}
               height={displayH}
-              style={{ cursor: 'crosshair', display: 'block', maxWidth: '100%' }}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
+              style={{ cursor: processing ? 'default' : 'crosshair', display: 'block', maxWidth: '100%', opacity: processing ? 0.5 : 1 }}
+              onMouseDown={processing ? undefined : handleMouseDown}
+              onMouseMove={processing ? undefined : handleMouseMove}
+              onMouseUp={processing ? undefined : handleMouseUp}
             />
           )}
           <p className="form-note" style={{ marginTop: 8 }}>
             Drag to select crop area
           </p>
+
+          {isObject && (
+            <label className="bg-removal-toggle">
+              <input
+                type="checkbox"
+                checked={removeBg}
+                onChange={e => setRemoveBg(e.target.checked)}
+                disabled={processing}
+              />
+              <span>Remove background</span>
+              <span className="bg-removal-note">(runs locally in browser)</span>
+            </label>
+          )}
+
+          {processing && (
+            <div className="bg-removal-progress">
+              <div className="bg-removal-spinner" />
+              <span>
+                {processingProgress > 0
+                  ? `Removing background… ${processingProgress}%`
+                  : 'Removing background…'}
+              </span>
+            </div>
+          )}
         </div>
         <div className="modal-footer">
-          <button className="btn" onClick={onSkip}>Use Full Image</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={!crop}>
+          <button className="btn" onClick={handleSkip} disabled={processing}>
+            Use Full Image
+          </button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={!crop || processing}>
             Save Crop
           </button>
         </div>

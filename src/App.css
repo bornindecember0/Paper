@@ -649,6 +649,54 @@ body {
   padding-top: 2px;
 }
 
+/* ── Background removal toggle ─────────────────────────────────────────────── */
+.bg-removal-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--ink);
+  user-select: none;
+}
+.bg-removal-toggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.bg-removal-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+.bg-removal-note {
+  font-size: 12px;
+  color: var(--ink-mid);
+  font-style: italic;
+}
+
+.bg-removal-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--ink-mid);
+  font-style: italic;
+}
+.bg-removal-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--rule);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Shared button styles ──────────────────────────────────────────────────── */
 .btn {
   padding: 8px 20px;

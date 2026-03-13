@@ -384,6 +384,7 @@ export default function App() {
       {pendingCrop && (
         <CropModal
           imageUrl={pendingCrop.url}
+          isObject={pendingCrop.objectId !== null}
           onSave={finalizeCrop}
           onSkip={handleCropSkip}
         />
