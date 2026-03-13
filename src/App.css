@@ -697,6 +697,29 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* ── Object lasso modal ────────────────────────────────────────────────────── */
+.object-crop-modal {
+  max-width: 620px;
+  width: 95vw;
+}
+
+/* Checkerboard shows transparency in the preview */
+.object-crop-preview {
+  background-color: #ccc;
+  background-image:
+    linear-gradient(45deg, #aaa 25%, transparent 25%),
+    linear-gradient(-45deg, #aaa 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #aaa 75%),
+    linear-gradient(-45deg, transparent 75%, #aaa 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* ── Shared button styles ──────────────────────────────────────────────────── */
 .btn {
   padding: 8px 20px;

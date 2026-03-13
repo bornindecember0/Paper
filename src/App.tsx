@@ -4,6 +4,7 @@ import { RightPanel } from './components/RightPanel';
 import { SlideModal, pullDirectionToAxis, pullDirectionToRangeSign } from './components/SlideModal';
 import type { PullDirection } from './components/SlideModal';
 import { CropModal } from './components/CropModal';
+import { ObjectCropModal } from './components/ObjectCropModal';
 import { PlayOverlay, getLeverAreaH } from './components/PlayOverlay';
 import { buildSavePayload, downloadSave } from './exportData';
 import type { CanvasObject, Position } from './types';
@@ -99,6 +100,11 @@ export default function App() {
   const handleCropSkip = useCallback(() => {
     if (pendingCrop) finalizeCrop(pendingCrop.url);
   }, [pendingCrop, finalizeCrop]);
+
+  const handleObjectCropCancel = useCallback(() => {
+    if (pendingCrop) URL.revokeObjectURL(pendingCrop.url);
+    setPendingCrop(null);
+  }, [pendingCrop]);
 
   // ── Object manipulation ───────────────────────────────────────────────────
 
@@ -380,13 +386,21 @@ export default function App() {
       />
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
-      {/* Crop modal — shown immediately after any upload */}
-      {pendingCrop && (
+      {/* Background crop modal */}
+      {pendingCrop && pendingCrop.objectId === null && (
         <CropModal
           imageUrl={pendingCrop.url}
-          isObject={pendingCrop.objectId !== null}
           onSave={finalizeCrop}
           onSkip={handleCropSkip}
+        />
+      )}
+
+      {/* Object lasso modal */}
+      {pendingCrop && pendingCrop.objectId !== null && (
+        <ObjectCropModal
+          imageUrl={pendingCrop.url}
+          onSave={finalizeCrop}
+          onCancel={handleObjectCropCancel}
         />
       )}
 
