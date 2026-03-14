@@ -7,7 +7,10 @@ export interface Position {
 
 export interface TransitionMovement {
   type: 'transition';
-  endPoint: Position;
+  /** Control points in coordinates relative to obj.position. path[0] ≈ {x:0,y:0}. */
+  path: Position[];
+  /** Physical cut-slot width in canvas px. */
+  slotWidth: number;
 }
 
 export interface RotationMovement {

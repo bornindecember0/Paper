@@ -8,6 +8,7 @@ import { ObjectCropModal } from './components/ObjectCropModal';
 import { PlayOverlay, getLeverAreaH } from './components/PlayOverlay';
 import { buildSavePayload, downloadSave } from './exportData';
 import type { CanvasObject, Position } from './types';
+import { DEFAULT_SLOT_WIDTH } from './pathUtils';
 
 export type Tab = 'design' | 'play';
 export type MovementDialog = 'rotation' | 'slide' | null;
@@ -22,18 +23,18 @@ export default function App() {
   const [bgFilename, setBgFilename] = useState<string>('');
   const [bgLocked, setBgLocked] = useState(false);
   const [objects, setObjects] = useState<CanvasObject[]>([]);
-  // Pending crop: raw blob URL + filename + optional objectId (null = background)
   const [pendingCrop, setPendingCrop] = useState<{
     url: string; filename: string; objectId: string | null;
   } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<MovementDialog>(null);
-  const [pickingEndPoint, setPickingEndPoint] = useState(false);
+  const [drawingTransPath, setDrawingTransPath] = useState(false);
   const [pickingAnchor, setPickingAnchor] = useState(false);
   const [rotationConfigOpen, setRotationConfigOpen] = useState(false);
   const [rotationDegrees, setRotationDegrees] = useState(360);
   const [rotationClockwise, setRotationClockwise] = useState(true);
   const [sliderValues, setSliderValues] = useState<Record<string, number>>({});
+  const [leverExposure, setLeverExposure] = useState(80);
 
   const selectedObject = objects.find(o => o.id === selectedId);
   const objectsWithMovement = objects.filter(o => o.movement);
@@ -54,22 +55,18 @@ export default function App() {
 
   const handleObjectUpload = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
-    // objectId = 'new' means we create a new object after crop
     setPendingCrop({ url, filename: file.name, objectId: 'new' });
   }, []);
 
-  // Finalize crop (called after crop save or skip)
   const finalizeCrop = useCallback((croppedUrl: string) => {
     if (!pendingCrop) return;
     const { filename, objectId } = pendingCrop;
     if (objectId === null) {
-      // Background
       if (background) URL.revokeObjectURL(background);
       setBackground(croppedUrl);
       setBgFilename(filename);
       setBgLocked(true);
     } else {
-      // New object (objectId === 'new')
       const img = new Image();
       img.onload = () => {
         const maxDim = 200;
@@ -88,12 +85,7 @@ export default function App() {
       };
       img.src = croppedUrl;
     }
-    // Only revoke the original pending crop URL if it's different from the final one.
-    // When the user chooses "Use Full Image", croppedUrl === pendingCrop.url and revoking
-    // it would break the image rendering on the canvas.
-    if (croppedUrl !== pendingCrop.url) {
-      URL.revokeObjectURL(pendingCrop.url);
-    }
+    if (croppedUrl !== pendingCrop.url) URL.revokeObjectURL(pendingCrop.url);
     setPendingCrop(null);
   }, [pendingCrop, background]);
 
@@ -118,35 +110,32 @@ export default function App() {
       const updated = { ...o, width, height, position };
       if (o.movement?.type === 'rotation') {
         const ap = o.movement.anchorPoint;
-        const maxX = width / 2;
-        const maxY = height / 2;
-        const clamped = {
-          x: Math.max(-maxX, Math.min(maxX, ap.x)),
-          y: Math.max(-maxY, Math.min(maxY, ap.y)),
-        };
+        const maxX = width / 2, maxY = height / 2;
+        const clamped = { x: Math.max(-maxX, Math.min(maxX, ap.x)), y: Math.max(-maxY, Math.min(maxY, ap.y)) };
         updated.movement = { ...o.movement, anchorPoint: clamped };
       }
       return updated;
     }));
   }, []);
 
-  // ── Translation end-point: canvas-click picking ───────────────────────────
+  // ── Translation path drawing ───────────────────────────────────────────────
 
-  const handleEndPointPick = useCallback((pos: Position) => {
+  const handleTransPathComplete = useCallback((path: Position[]) => {
     if (!selectedId) return;
     setObjects(prev => prev.map(o =>
-      o.id === selectedId ? { ...o, movement: { type: 'transition', endPoint: pos } } : o,
+      o.id === selectedId
+        ? { ...o, movement: { type: 'transition', path, slotWidth: DEFAULT_SLOT_WIDTH } }
+        : o,
     ));
-    setPickingEndPoint(false);
+    setDrawingTransPath(false);
   }, [selectedId]);
 
-  // ── Rotation / Slide config ───────────────────────────────────────────────
+  // ── Rotation / Anchor picking ─────────────────────────────────────────────
 
   const handleAnchorPick = useCallback((pos: Position) => {
     if (!selectedId) return;
     setObjects(prev => prev.map(o => {
       if (o.id !== selectedId) return o;
-      // Store anchor as offset from object center so it moves with the object
       const anchorOffset = { x: pos.x - o.position.x, y: pos.y - o.position.y };
       return { ...o, movement: { type: 'rotation', anchorPoint: anchorOffset, degrees: rotationDegrees, clockwise: rotationClockwise } };
     }));
@@ -165,16 +154,7 @@ export default function App() {
     const range = sign * (axis === 'vertical' ? CANVAS_H : CANVAS_W);
     setObjects(prev => prev.map(o =>
       o.id === beforeObjectId
-        ? {
-            ...o,
-            movement: {
-              type: 'slide',
-              direction: axis,
-              pullDirection,
-              range,
-              secondObjectId: afterObjectId,
-            },
-          }
+        ? { ...o, movement: { type: 'slide', direction: axis, pullDirection, range, secondObjectId: afterObjectId } }
         : o,
     ));
     setSelectedId(beforeObjectId);
@@ -193,20 +173,16 @@ export default function App() {
 
   const handleSave = useCallback(async () => {
     const payload = await buildSavePayload({
-      background,
-      bgFilename,
-      objects,
-      canvasW: CANVAS_W,
-      canvasH: CANVAS_H,
+      background, bgFilename, objects, canvasW: CANVAS_W, canvasH: CANVAS_H, leverExposure,
     });
     downloadSave(payload);
-  }, [background, bgFilename, objects]);
+  }, [background, bgFilename, objects, leverExposure]);
 
   // ── Movement button dispatch ──────────────────────────────────────────────
 
   const handleMovementOpen = useCallback((type: 'translate' | 'rotation' | 'slide') => {
     if (type === 'translate') {
-      setPickingEndPoint(true);
+      setDrawingTransPath(true);
     } else if (type === 'rotation') {
       const rot = selectedObject?.movement?.type === 'rotation' ? selectedObject.movement : undefined;
       setRotationDegrees(rot?.degrees ?? 360);
@@ -222,7 +198,7 @@ export default function App() {
 
   const handleTabChange = useCallback((t: Tab) => {
     setTab(t);
-    setPickingEndPoint(false);
+    setDrawingTransPath(false);
     setPickingAnchor(false);
     setRotationConfigOpen(false);
     if (t === 'play') {
@@ -243,34 +219,27 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* ── Canvas area (gray background) ─────────────────────────────────── */}
+      {/* ── Canvas area ─────────────────────────────────────────────────────── */}
       <div className="canvas-area">
 
-        {/* Design / Play tabs — top-right of canvas area */}
         <div className="canvas-tabs">
-          <button
-            className={`tab-btn ${tab === 'design' ? 'active' : ''}`}
-            onClick={() => handleTabChange('design')}
-          >Design</button>
-          <button
-            className={`tab-btn ${tab === 'play' ? 'active' : ''}`}
-            onClick={() => handleTabChange('play')}
-          >Play</button>
+          <button className={`tab-btn ${tab === 'design' ? 'active' : ''}`} onClick={() => handleTabChange('design')}>Design</button>
+          <button className={`tab-btn ${tab === 'play' ? 'active' : ''}`} onClick={() => handleTabChange('play')}>Play</button>
         </div>
 
         {/* Picking hint */}
-        {(pickingEndPoint || pickingAnchor) && (
+        {(drawingTransPath || pickingAnchor) && (
           <div className="picking-hint">
-            {pickingEndPoint ? 'Click on the canvas to set the end point'
+            {drawingTransPath
+              ? 'Hold and drag on the canvas to draw the cut path'
               : 'Click inside the object to set the rotation anchor'}
             <button
               className="picking-cancel"
-              onClick={() => { setPickingEndPoint(false); setPickingAnchor(false); }}
+              onClick={() => { setDrawingTransPath(false); setPickingAnchor(false); }}
             >✕</button>
           </div>
         )}
 
-        {/* Canvas + levers — layer order: background (0) < lever (1) < object (2) */}
         <div
           className="canvas-play-wrapper"
           style={tab === 'play' && leverAreaH > 0 ? { marginTop: leverAreaH } : undefined}
@@ -288,13 +257,13 @@ export default function App() {
                     objects={objects}
                     selectedId={null}
                     isPlayMode={true}
-                    pickingEndPoint={false}
+                    drawingTransPath={false}
                     pickingAnchor={false}
                     sliderValues={sliderValues}
                     onObjectSelect={() => {}}
                     onObjectMove={handleObjectMove}
                     onObjectResize={handleObjectResize}
-                    onEndPointPick={handleEndPointPick}
+                    onTransPathComplete={() => {}}
                     onAnchorPick={handleAnchorPick}
                   />
                 </div>
@@ -303,6 +272,7 @@ export default function App() {
                   sliderValues={sliderValues}
                   canvasW={CANVAS_W}
                   canvasH={CANVAS_H}
+                  leverExposure={leverExposure}
                   onChange={handleSliderChange}
                 />
                 <div className="canvas-layer canvas-layer-path" style={{ zIndex: 2 }}>
@@ -312,13 +282,13 @@ export default function App() {
                     objects={objects}
                     selectedId={null}
                     isPlayMode={true}
-                    pickingEndPoint={false}
+                    drawingTransPath={false}
                     pickingAnchor={false}
                     sliderValues={sliderValues}
                     onObjectSelect={() => {}}
                     onObjectMove={handleObjectMove}
                     onObjectResize={handleObjectResize}
-                    onEndPointPick={handleEndPointPick}
+                    onTransPathComplete={() => {}}
                     onAnchorPick={handleAnchorPick}
                   />
                 </div>
@@ -329,13 +299,13 @@ export default function App() {
                     objects={objects}
                     selectedId={null}
                     isPlayMode={true}
-                    pickingEndPoint={false}
+                    drawingTransPath={false}
                     pickingAnchor={false}
                     sliderValues={sliderValues}
                     onObjectSelect={() => {}}
                     onObjectMove={handleObjectMove}
                     onObjectResize={handleObjectResize}
-                    onEndPointPick={handleEndPointPick}
+                    onTransPathComplete={() => {}}
                     onAnchorPick={handleAnchorPick}
                   />
                 </div>
@@ -346,13 +316,13 @@ export default function App() {
                 objects={objects}
                 selectedId={selectedId}
                 isPlayMode={tab === 'play'}
-                pickingEndPoint={pickingEndPoint}
+                drawingTransPath={drawingTransPath}
                 pickingAnchor={pickingAnchor}
                 sliderValues={sliderValues}
                 onObjectSelect={id => { if (tab === 'design') setSelectedId(id); }}
                 onObjectMove={handleObjectMove}
                 onObjectResize={handleObjectResize}
-                onEndPointPick={handleEndPointPick}
+                onTransPathComplete={handleTransPathComplete}
                 onAnchorPick={handleAnchorPick}
               />
             )}
@@ -383,10 +353,12 @@ export default function App() {
         onRotationPickAnchor={() => setPickingAnchor(true)}
         onRotationCancel={() => { setRotationConfigOpen(false); setPickingAnchor(false); }}
         pickingAnchor={pickingAnchor}
+        leverExposure={leverExposure}
+        onLeverExposureChange={setLeverExposure}
+        drawingTransPath={drawingTransPath}
       />
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
-      {/* Background crop modal */}
       {pendingCrop && pendingCrop.objectId === null && (
         <CropModal
           imageUrl={pendingCrop.url}
@@ -395,7 +367,6 @@ export default function App() {
         />
       )}
 
-      {/* Object lasso modal */}
       {pendingCrop && pendingCrop.objectId !== null && (
         <ObjectCropModal
           imageUrl={pendingCrop.url}

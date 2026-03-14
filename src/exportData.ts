@@ -4,11 +4,15 @@
  */
 import type { CanvasObject, Movement } from './types';
 import { LEVER_ROW_H, getTransitionDims, getRotationDims, getRotationAnchor } from './leverGeometry';
+import { totalArcLength, resolveAbsPath } from './pathUtils';
 
 export interface ExportMovementTransition {
   type: 'transition';
+  /** Path control points relative to startPosition. path[0] ≈ {x:0,y:0}. */
+  path: { x: number; y: number }[];
   startPosition: { x: number; y: number };
-  endPoint: { x: number; y: number };
+  slotWidth: number;
+  arcLength: number;
   leverLength: number;
   rodWidth: number;
 }
@@ -49,6 +53,7 @@ export interface ExportObjectEntry {
 export interface BuildExportOptions {
   canvasW: number;
   canvasH: number;
+  leverExposure: number;
 }
 
 /**
@@ -59,7 +64,7 @@ export function buildExportData(
   objects: CanvasObject[],
   options: BuildExportOptions,
 ): ExportObjectEntry[] {
-  const { canvasW, canvasH } = options;
+  const { canvasW, canvasH, leverExposure } = options;
   const objectsWithMovement = objects.filter((o): o is CanvasObject & { movement: Movement } => !!o.movement);
   const slideCount = objectsWithMovement.filter(o => o.movement.type === 'slide').length;
   const totalLeverH = slideCount * LEVER_ROW_H;
@@ -69,13 +74,16 @@ export function buildExportData(
     const base = { id, filename, position: { ...position }, width, height };
 
     if (movement.type === 'transition') {
-      const dims = getTransitionDims(obj, totalLeverH, canvasW, canvasH);
+      const dims = getTransitionDims(obj, leverExposure, totalLeverH, canvasW, canvasH);
+      const absPath = resolveAbsPath(movement.path, position);
       return {
         ...base,
         movement: {
           type: 'transition',
+          path: movement.path.map(p => ({ ...p })),
           startPosition: { ...position },
-          endPoint: { ...movement.endPoint },
+          slotWidth: movement.slotWidth,
+          arcLength: Math.round(totalArcLength(absPath)),
           leverLength: dims.leverLength,
           rodWidth: dims.rodWidth,
         },
@@ -150,14 +158,15 @@ export interface SaveSceneOptions {
   objects: CanvasObject[];
   canvasW: number;
   canvasH: number;
+  leverExposure: number;
 }
 
 /**
  * Build full save payload with base64 image data for background and all objects.
  */
 export async function buildSavePayload(options: SaveSceneOptions): Promise<SavePayload> {
-  const { background, bgFilename, objects, canvasW, canvasH } = options;
-  const exportData = buildExportData(objects, { canvasW, canvasH });
+  const { background, bgFilename, objects, canvasW, canvasH, leverExposure } = options;
+  const exportData = buildExportData(objects, { canvasW, canvasH, leverExposure });
   const exportById = new Map(exportData.map(e => [e.id, e]));
 
   const objectEntries = await Promise.all(

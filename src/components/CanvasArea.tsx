@@ -1,10 +1,13 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import type { CanvasObject, Position } from '../types';
 import { getRotationAnchor } from '../leverGeometry';
+import { getPathPoint, resolveAbsPath, rdpSimplify } from '../pathUtils';
 
 export const CANVAS_W = 800;
 export const CANVAS_H = 600;
 const GRID = 20;
+const MIN_DRAW_DIST = 4; // px — throttle raw sample distance
+const RDP_EPSILON = 4;   // px — RDP simplification threshold
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -18,11 +21,9 @@ function getAnimatedState(obj: CanvasObject, t: number): {
   if (!movement) return { cx: pos.x, cy: pos.y, angleDeg: 0 };
 
   if (movement.type === 'transition') {
-    return {
-      cx: pos.x + (movement.endPoint.x - pos.x) * t,
-      cy: pos.y + (movement.endPoint.y - pos.y) * t,
-      angleDeg: 0,
-    };
+    const absPath = resolveAbsPath(movement.path, pos);
+    const pt = getPathPoint(absPath, t);
+    return { cx: pt.x, cy: pt.y, angleDeg: 0 };
   }
   if (movement.type === 'rotation') {
     const totalDeg = movement.degrees * (movement.clockwise ? 1 : -1) * t;
@@ -53,7 +54,7 @@ function hitTest(objects: CanvasObject[], pos: Position): CanvasObject | null {
   return null;
 }
 
-// ── Arrow drawing ─────────────────────────────────────────────────────────────
+// ── Drawing helpers ───────────────────────────────────────────────────────────
 
 function arrowHead(ctx: CanvasRenderingContext2D, fx: number, fy: number, tx: number, ty: number) {
   const len = 11;
@@ -66,17 +67,52 @@ function arrowHead(ctx: CanvasRenderingContext2D, fx: number, fy: number, tx: nu
   ctx.stroke();
 }
 
-function drawTransitionArrow(ctx: CanvasRenderingContext2D, from: Position, to: Position) {
+function drawTransitionSlot(
+  ctx: CanvasRenderingContext2D,
+  path: Position[],
+  slotWidth: number,
+  alpha = 1,
+) {
+  if (path.length < 2) return;
   ctx.save();
-  ctx.strokeStyle = '#444';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([5, 3]);
+  ctx.globalAlpha = alpha;
+
+  // Slot band
+  ctx.strokeStyle = 'rgba(40,40,40,0.5)';
+  ctx.lineWidth = slotWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
   ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
-  ctx.lineTo(to.x, to.y);
+  ctx.moveTo(path[0].x, path[0].y);
+  path.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+  ctx.stroke();
+
+  // Dashed white centerline
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(path[0].x, path[0].y);
+  path.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
   ctx.stroke();
   ctx.setLineDash([]);
-  arrowHead(ctx, from.x, from.y, to.x, to.y);
+
+  // Arrowhead at end
+  ctx.strokeStyle = 'rgba(40,40,40,0.8)';
+  ctx.lineWidth = 1.5;
+  const n = path.length;
+  arrowHead(ctx, path[n - 2].x, path[n - 2].y, path[n - 1].x, path[n - 1].y);
+
+  // Start dot
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(path[0].x, path[0].y, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
@@ -134,49 +170,12 @@ function drawSlideArrow(ctx: CanvasRenderingContext2D, obj: CanvasObject) {
 
 // ── Collision zones ───────────────────────────────────────────────────────────
 
-function convexHull(pts: Position[]): Position[] {
-  if (pts.length < 3) return pts;
-  const sorted = [...pts].sort((a, b) => a.x !== b.x ? a.x - b.x : a.y - b.y);
-  const cross = (O: Position, A: Position, B: Position) =>
-    (A.x - O.x) * (B.y - O.y) - (A.y - O.y) * (B.x - O.x);
-  const lower: Position[] = [];
-  for (const p of sorted) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
-    lower.push(p);
-  }
-  const upper: Position[] = [];
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const p = sorted[i];
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
-    upper.push(p);
-  }
-  upper.pop(); lower.pop();
-  return lower.concat(upper);
-}
-
 function drawCollisionZone(ctx: CanvasRenderingContext2D, obj: CanvasObject, cw: number, ch: number) {
   if (!obj.movement) return;
   const { position: pos, width: w, height: h, movement } = obj;
   ctx.save();
 
-  if (movement.type === 'transition') {
-    const dx = movement.endPoint.x - pos.x;
-    const dy = movement.endPoint.y - pos.y;
-    const corners = [
-      { x: pos.x - w / 2, y: pos.y - h / 2 },
-      { x: pos.x + w / 2, y: pos.y - h / 2 },
-      { x: pos.x + w / 2, y: pos.y + h / 2 },
-      { x: pos.x - w / 2, y: pos.y + h / 2 },
-    ];
-    const hull = convexHull([...corners, ...corners.map(c => ({ x: c.x + dx, y: c.y + dy }))]);
-    ctx.fillStyle = 'rgba(90,90,90,0.10)';
-    ctx.strokeStyle = 'rgba(80,80,80,0.3)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    if (hull.length > 0) { ctx.moveTo(hull[0].x, hull[0].y); hull.forEach(p => ctx.lineTo(p.x, p.y)); ctx.closePath(); }
-    ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
-  }
+  // Transition: the slot visual already shows the path; no extra collision zone needed.
 
   if (movement.type === 'rotation') {
     const anchor = getRotationAnchor(obj);
@@ -204,7 +203,6 @@ function drawCollisionZone(ctx: CanvasRenderingContext2D, obj: CanvasObject, cw:
     ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.rect(rx, ry, rw, rh);
     ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
-    // Highlight the window (before image position)
     ctx.strokeStyle = 'rgba(80,80,200,0.5)';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 3]);
@@ -217,8 +215,7 @@ function drawCollisionZone(ctx: CanvasRenderingContext2D, obj: CanvasObject, cw:
 
 // ── Corner resize handle helpers ───────────────────────────────────────────────
 
-const CORNER_SIZE = 8; // px, half-size of corner handle hit area
-
+const CORNER_SIZE = 8;
 type Corner = 'tl' | 'tr' | 'bl' | 'br';
 
 function getCorners(obj: CanvasObject): Record<Corner, Position> {
@@ -234,10 +231,7 @@ function getCorners(obj: CanvasObject): Record<Corner, Position> {
 function hitCorner(obj: CanvasObject, pos: Position): Corner | null {
   const corners = getCorners(obj);
   for (const [key, cp] of Object.entries(corners) as [Corner, Position][]) {
-    if (
-      Math.abs(pos.x - cp.x) <= CORNER_SIZE &&
-      Math.abs(pos.y - cp.y) <= CORNER_SIZE
-    ) return key;
+    if (Math.abs(pos.x - cp.x) <= CORNER_SIZE && Math.abs(pos.y - cp.y) <= CORNER_SIZE) return key;
   }
   return null;
 }
@@ -266,21 +260,23 @@ interface Props {
   objects: CanvasObject[];
   selectedId: string | null;
   isPlayMode: boolean;
-  pickingEndPoint: boolean;
+  /** True while user is drawing a freehand translation path */
+  drawingTransPath: boolean;
   pickingAnchor: boolean;
   sliderValues: Record<string, number>;
-  /** When 'background': bg+strip only. When 'path': translation path only (above lever, below object). When 'objects': objects + anchor dots. When 'full': single canvas. */
   layer?: CanvasLayer;
   onObjectSelect: (id: string | null) => void;
   onObjectMove: (id: string, pos: Position) => void;
   onObjectResize: (id: string, width: number, height: number, position: Position) => void;
-  onEndPointPick: (pos: Position) => void;
+  /** Called with relative path (relative to selected obj position) when drawing finishes */
+  onTransPathComplete: (path: Position[]) => void;
   onAnchorPick: (pos: Position) => void;
 }
 
 export function CanvasArea({
-  background, objects, selectedId, isPlayMode, pickingEndPoint, pickingAnchor,
-  sliderValues, layer = 'full', onObjectSelect, onObjectMove, onObjectResize, onEndPointPick, onAnchorPick,
+  background, objects, selectedId, isPlayMode, drawingTransPath, pickingAnchor,
+  sliderValues, layer = 'full', onObjectSelect, onObjectMove, onObjectResize,
+  onTransPathComplete, onAnchorPick,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageCache = useRef<Record<string, HTMLImageElement>>({});
@@ -292,6 +288,18 @@ export function CanvasArea({
   } | null>(null);
   const didMoveRef = useRef(false);
   const [redrawTrigger, setRedrawTrigger] = useState(0);
+
+  // Freehand drawing state — use ref for closure access, counter for render trigger
+  const livePathRef = useRef<Position[]>([]);
+  const [livePathCount, setLivePathCount] = useState(0);
+
+  // Reset live path when drawing mode is toggled off
+  useEffect(() => {
+    if (!drawingTransPath) {
+      livePathRef.current = [];
+      setLivePathCount(0);
+    }
+  }, [drawingTransPath]);
 
   // Image loading
   useEffect(() => {
@@ -315,26 +323,28 @@ export function CanvasArea({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Path-only layer: translation gray rail above lever, below object
+    // ── Path-only layer: transition slot above lever, below object ────────────
     if (layer === 'path') {
       ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
       objects.forEach(obj => {
         const m = obj.movement;
         if (m?.type !== 'transition') return;
+        const absPath = resolveAbsPath(m.path, obj.position);
         ctx.save();
         ctx.strokeStyle = '#5a5a5a';
-        ctx.lineWidth = 10;
+        ctx.lineWidth = m.slotWidth;
         ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
         ctx.beginPath();
-        ctx.moveTo(obj.position.x, obj.position.y);
-        ctx.lineTo(m.endPoint.x, m.endPoint.y);
+        ctx.moveTo(absPath[0].x, absPath[0].y);
+        absPath.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
         ctx.stroke();
         ctx.restore();
       });
       return;
     }
 
-    // Objects-only layer: clear to transparent, draw objects, then anchor dots on top
+    // ── Objects-only layer ────────────────────────────────────────────────────
     if (layer === 'objects') {
       ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
       objects.forEach(obj => {
@@ -358,7 +368,7 @@ export function CanvasArea({
         ctx.drawImage(imgEl, -obj.width / 2, -obj.height / 2, obj.width, obj.height);
         ctx.restore();
       });
-      // Draw anchor dots and translation path on top so they're always visible
+      // Anchor/pivot dots on top
       objects.forEach(obj => {
         const m = obj.movement;
         if (!m) return;
@@ -373,13 +383,12 @@ export function CanvasArea({
           ctx.restore();
         }
         if (m.type === 'transition') {
-          // Pivot dot at current position (path is drawn in background layer, below object)
-          const cx = obj.position.x + (m.endPoint.x - obj.position.x) * t;
-          const cy = obj.position.y + (m.endPoint.y - obj.position.y) * t;
+          const absPath = resolveAbsPath(m.path, obj.position);
+          const pt = getPathPoint(absPath, t);
           ctx.save();
           ctx.fillStyle = '#111';
           ctx.beginPath();
-          ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+          ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
           ctx.fill();
           ctx.restore();
         }
@@ -387,16 +396,15 @@ export function CanvasArea({
       return;
     }
 
-    // White fill (background layer or full)
+    // ── White fill (background + full layers) ─────────────────────────────────
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Background image
     if (background && imageCache.current[background]) {
       ctx.drawImage(imageCache.current[background], 0, 0, CANVAS_W, CANVAS_H);
     }
 
-    // Grid (always drawn, subtle)
+    // Grid
     ctx.save();
     ctx.strokeStyle = 'rgba(0,0,0,0.07)';
     ctx.lineWidth = 0.5;
@@ -411,70 +419,52 @@ export function CanvasArea({
     // Collision zones (design mode only)
     if (!isPlayMode) {
       objects.forEach(obj => {
-        // When picking anchor, skip rotation viz for selected object (user is setting anchor)
         if (pickingAnchor && obj.id === selectedId && obj.movement?.type === 'rotation') return;
         drawCollisionZone(ctx, obj, CANVAS_W, CANVAS_H);
       });
     }
 
-    // Play mode: draw track bars (slide strip only here; transition path is on 'path' layer above lever)
+    // Play mode rails and slide strips
     if (isPlayMode) {
       objects.forEach(obj => {
         const m = obj.movement;
         if (!m) return;
         ctx.save();
         if (m.type === 'transition' && layer !== 'background') {
-          // In full canvas mode: gray rail here. When layered, transition path is drawn on 'path' layer.
+          // In full canvas mode draw the slot rail here; in layered mode it's on 'path' layer
+          const absPath = resolveAbsPath(m.path, obj.position);
           ctx.strokeStyle = '#5a5a5a';
-          ctx.lineWidth = 10;
+          ctx.lineWidth = m.slotWidth;
           ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
           ctx.beginPath();
-          ctx.moveTo(obj.position.x, obj.position.y);
-          ctx.lineTo(m.endPoint.x, m.endPoint.y);
+          ctx.moveTo(absPath[0].x, absPath[0].y);
+          absPath.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
           ctx.stroke();
         }
         if (m.type === 'slide') {
           const { direction, pullDirection, secondObjectId } = m;
           const { position: beforePos, width: imgW, height: imgH } = obj;
           const t = sliderValues[obj.id] ?? 0;
-
           const winX = beforePos.x - imgW / 2;
           const winY = beforePos.y - imgH / 2;
-
           const afterObj = objects.find(o => o.id === secondObjectId);
 
-          // ── BOTTOM LAYER: slider strip ──────────────────────────────────
-          // Two image cells placed end-to-end along the movement axis.
-          // Each cell has the background region painted first, then the image.
-
-          let stripX: number;
-          let stripY: number;
-
+          let stripX: number, stripY: number;
           if (direction === 'vertical') {
             stripX = winX;
-            if (pullDirection === 'down') {
-              // at t=0 strip is below; at t=1 before-cell sits over window
-              // before-cell is first, so strip top = winY when t=1
-              // stripY + 0*imgH = winY at t=1 → stripY = winY - (1-t)*CANVAS_H
-              stripY = winY + (t - 1) * CANVAS_H;
-            } else {
-              // pull=up: at t=0 strip is above; at t=1 before-cell (second) sits over window
-              // strip has after then before, so before is at stripY+imgH
-              // stripY + imgH = winY at t=1 → stripY = winY - imgH + t * CANVAS_H - CANVAS_H
-              stripY = winY - imgH + (1 - t) * CANVAS_H;
-            }
+            stripY = pullDirection === 'down'
+              ? winY + (t - 1) * CANVAS_H
+              : winY - imgH + (1 - t) * CANVAS_H;
           } else {
             stripY = winY;
-            if (pullDirection === 'right') {
-              stripX = winX + (t - 1) * CANVAS_W;
-            } else {
-              stripX = winX - imgW + (1 - t) * CANVAS_W;
-            }
+            stripX = pullDirection === 'right'
+              ? winX + (t - 1) * CANVAS_W
+              : winX - imgW + (1 - t) * CANVAS_W;
           }
 
           type Cell = { imgUrl: string | null; cellX: number; cellY: number };
           const cells: Cell[] = [];
-
           if (direction === 'vertical') {
             if (pullDirection === 'down') {
               cells.push({ imgUrl: afterObj?.imageUrl ?? null, cellX: stripX, cellY: stripY });
@@ -482,7 +472,6 @@ export function CanvasArea({
             } else {
               cells.push({ imgUrl: afterObj?.imageUrl ?? null, cellX: stripX, cellY: stripY });
               cells.push({ imgUrl: obj.imageUrl, cellX: stripX, cellY: stripY - imgH });
-              
             }
           } else {
             if (pullDirection === 'right') {
@@ -495,22 +484,15 @@ export function CanvasArea({
           }
 
           const bgImg = background ? imageCache.current[background] : null;
-
           cells.forEach(({ imgUrl, cellX, cellY }) => {
             ctx.save();
-            ctx.beginPath();
-            ctx.rect(cellX, cellY, imgW, imgH);
-            ctx.clip();
+            ctx.beginPath(); ctx.rect(cellX, cellY, imgW, imgH); ctx.clip();
             if (bgImg) {
-              const scaleX = bgImg.naturalWidth / CANVAS_W;
-              const scaleY = bgImg.naturalHeight / CANVAS_H;
-              ctx.drawImage(bgImg,
-                winX * scaleX, winY * scaleY, imgW * scaleX, imgH * scaleY,
-                cellX, cellY, imgW, imgH,
-              );
+              const sx = bgImg.naturalWidth / CANVAS_W;
+              const sy = bgImg.naturalHeight / CANVAS_H;
+              ctx.drawImage(bgImg, winX * sx, winY * sy, imgW * sx, imgH * sy, cellX, cellY, imgW, imgH);
             } else {
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(cellX, cellY, imgW, imgH);
+              ctx.fillStyle = '#ffffff'; ctx.fillRect(cellX, cellY, imgW, imgH);
             }
             if (imgUrl && imageCache.current[imgUrl]) {
               ctx.drawImage(imageCache.current[imgUrl], cellX, cellY, imgW, imgH);
@@ -518,17 +500,14 @@ export function CanvasArea({
             ctx.restore();
           });
 
-          // ── TOP LAYER: background with cut-out window ───────────────────
           if (bgImg) {
             const off = document.createElement('canvas');
-            off.width = CANVAS_W;
-            off.height = CANVAS_H;
+            off.width = CANVAS_W; off.height = CANVAS_H;
             const offCtx = off.getContext('2d')!;
             offCtx.drawImage(bgImg, 0, 0, CANVAS_W, CANVAS_H);
             offCtx.globalCompositeOperation = 'destination-out';
             offCtx.fillStyle = 'rgba(0,0,0,1)';
             offCtx.fillRect(winX, winY, imgW, imgH);
-            offCtx.globalCompositeOperation = 'source-over';
             ctx.drawImage(off, 0, 0);
           }
         }
@@ -536,21 +515,16 @@ export function CanvasArea({
       });
     }
 
-    // Draw objects (skip for background layer — objects go on separate layer above lever)
-    if (layer === 'background') {
-      // Design-mode-only overlays (arrows, picking, etc.) are not drawn in background layer
-      return;
-    }
+    if (layer === 'background') return;
 
+    // Draw objects
     objects.forEach(obj => {
       const imgEl = imageCache.current[obj.imageUrl];
       if (!imgEl) return;
       const t = isPlayMode ? (sliderValues[obj.id] ?? 0) : 0;
       const { cx, cy, angleDeg, pivot } = getAnimatedState(obj, t);
 
-      // Slide objects are fully composited by the strip renderer above
       if (isPlayMode && obj.movement?.type === 'slide') return;
-      // Skip the "after" object of any slide (it lives on the strip too)
       if (isPlayMode) {
         const isAfterObj = objects.some(
           o => o.movement?.type === 'slide' && o.movement.secondObjectId === obj.id,
@@ -561,7 +535,6 @@ export function CanvasArea({
       ctx.save();
       ctx.translate(cx, cy);
       if (angleDeg !== 0 && pivot) {
-        // 以 anchor 为圆心自转：pivot 在 world 坐标，相对当前 center 的偏移
         const anchorRel = { x: pivot.x - cx, y: pivot.y - cy };
         ctx.translate(anchorRel.x, anchorRel.y);
         ctx.rotate((angleDeg * Math.PI) / 180);
@@ -569,7 +542,6 @@ export function CanvasArea({
       }
       ctx.drawImage(imgEl, -obj.width / 2, -obj.height / 2, obj.width, obj.height);
 
-      // Selection border (design mode)
       if (obj.id === selectedId && !isPlayMode) {
         ctx.strokeStyle = '#444';
         ctx.lineWidth = 1.5;
@@ -577,35 +549,62 @@ export function CanvasArea({
       }
       ctx.restore();
 
-      // Corner handles (design mode, selected) — hide when picking anchor
       if (obj.id === selectedId && !isPlayMode && !pickingAnchor) {
         drawCornerHandles(ctx, obj);
       }
     });
 
-    // Movement arrows (design mode)
+    // Movement arrows / slot visuals (design mode)
     if (!isPlayMode) {
       objects.forEach(obj => {
         if (!obj.movement) return;
-        // When picking anchor, skip rotation viz for selected object (user is setting anchor)
         if (pickingAnchor && obj.id === selectedId && obj.movement.type === 'rotation') return;
-        if (obj.movement.type === 'transition') drawTransitionArrow(ctx, obj.position, obj.movement.endPoint);
-        else if (obj.movement.type === 'rotation') drawRotationArc(ctx, getRotationAnchor(obj), obj.position, obj.movement.degrees, obj.movement.clockwise);
-        else if (obj.movement.type === 'slide') drawSlideArrow(ctx, obj);
+        if (obj.movement.type === 'transition') {
+          const absPath = resolveAbsPath(obj.movement.path, obj.position);
+          drawTransitionSlot(ctx, absPath, obj.movement.slotWidth);
+        } else if (obj.movement.type === 'rotation') {
+          drawRotationArc(ctx, getRotationAnchor(obj), obj.position, obj.movement.degrees, obj.movement.clockwise);
+        } else if (obj.movement.type === 'slide') {
+          drawSlideArrow(ctx, obj);
+        }
       });
     }
 
-    // Picking mode: pulsing border hint
-    if (pickingEndPoint || pickingAnchor) {
+    // Live freehand path while drawing
+    const livePts = livePathRef.current;
+    if (drawingTransPath && livePts.length >= 1) {
+      const selectedObj = objects.find(o => o.id === selectedId);
+      if (selectedObj) {
+        drawTransitionSlot(
+          ctx,
+          livePts.length >= 2 ? livePts : [livePts[0], livePts[0]],
+          8,
+          0.65,
+        );
+        // Emphasise start dot in green
+        ctx.save();
+        ctx.fillStyle = '#4CAF50';
+        ctx.strokeStyle = '#2E7D32';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(livePts[0].x, livePts[0].y, 6, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Border hint while in special picking modes
+    if (drawingTransPath || pickingAnchor) {
       ctx.save();
-      ctx.strokeStyle = pickingAnchor ? 'rgba(60,100,200,0.5)' : 'rgba(80,80,80,0.5)';
+      ctx.strokeStyle = drawingTransPath ? 'rgba(60,160,60,0.5)' : 'rgba(60,100,200,0.5)';
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 4]);
       ctx.strokeRect(2, 2, CANVAS_W - 4, CANVAS_H - 4);
       ctx.setLineDash([]);
       ctx.restore();
     }
-  }, [background, objects, selectedId, isPlayMode, pickingEndPoint, pickingAnchor, sliderValues, redrawTrigger, layer]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [background, objects, selectedId, isPlayMode, drawingTransPath, pickingAnchor, sliderValues, redrawTrigger, layer, livePathCount]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -614,11 +613,59 @@ export function CanvasArea({
     return { x: Math.round(e.clientX - rect.left), y: Math.round(e.clientY - rect.top) };
   };
 
+  // ── Freehand drawing handlers ─────────────────────────────────────────────
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isPlayMode || pickingEndPoint || pickingAnchor) return;
+    if (drawingTransPath) {
+      e.preventDefault();
+      const selectedObj = objects.find(o => o.id === selectedId);
+      if (!selectedObj) return;
+      // Always start from object centre
+      const startPt = { ...selectedObj.position };
+      livePathRef.current = [startPt];
+      setLivePathCount(1);
+
+      const onMove = (me: MouseEvent) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const pos: Position = {
+          x: Math.max(0, Math.min(CANVAS_W, Math.round(me.clientX - rect.left))),
+          y: Math.max(0, Math.min(CANVAS_H, Math.round(me.clientY - rect.top))),
+        };
+        const last = livePathRef.current[livePathRef.current.length - 1];
+        if (Math.hypot(pos.x - last.x, pos.y - last.y) >= MIN_DRAW_DIST) {
+          livePathRef.current = [...livePathRef.current, pos];
+          setLivePathCount(n => n + 1);
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        const raw = livePathRef.current;
+        if (raw.length >= 2) {
+          const simplified = rdpSimplify(raw, RDP_EPSILON);
+          const origin = raw[0];
+          const relative = simplified.map(p => ({
+            x: Math.round(p.x - origin.x),
+            y: Math.round(p.y - origin.y),
+          }));
+          onTransPathComplete(relative);
+        }
+        livePathRef.current = [];
+        setLivePathCount(0);
+      };
+
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      return;
+    }
+
+    if (isPlayMode || pickingAnchor) return;
+
     const pos = getPos(e);
 
-    // Check corner handles first (only when an object is selected)
     if (selectedId) {
       const selectedObj = objects.find(o => o.id === selectedId);
       if (selectedObj) {
@@ -647,40 +694,17 @@ export function CanvasArea({
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (drawingTransPath) return; // handled by global listener
     if (resizeRef.current) {
       const pos = getPos(e);
       const { id, corner, startMouseX, startMouseY, startW, startH, startPos } = resizeRef.current;
       const dx = pos.x - startMouseX;
       const dy = pos.y - startMouseY;
-
-      let newW = startW;
-      let newH = startH;
-      let newX = startPos.x;
-      let newY = startPos.y;
-
-      // Each corner adjusts width/height and repositions center accordingly
-      if (corner === 'br') {
-        newW = Math.max(10, startW + dx);
-        newH = Math.max(10, startH + dy);
-        newX = startPos.x + (newW - startW) / 2;
-        newY = startPos.y + (newH - startH) / 2;
-      } else if (corner === 'bl') {
-        newW = Math.max(10, startW - dx);
-        newH = Math.max(10, startH + dy);
-        newX = startPos.x - (newW - startW) / 2;
-        newY = startPos.y + (newH - startH) / 2;
-      } else if (corner === 'tr') {
-        newW = Math.max(10, startW + dx);
-        newH = Math.max(10, startH - dy);
-        newX = startPos.x + (newW - startW) / 2;
-        newY = startPos.y - (newH - startH) / 2;
-      } else if (corner === 'tl') {
-        newW = Math.max(10, startW - dx);
-        newH = Math.max(10, startH - dy);
-        newX = startPos.x - (newW - startW) / 2;
-        newY = startPos.y - (newH - startH) / 2;
-      }
-
+      let newW = startW, newH = startH, newX = startPos.x, newY = startPos.y;
+      if (corner === 'br') { newW = Math.max(10, startW + dx); newH = Math.max(10, startH + dy); newX = startPos.x + (newW - startW) / 2; newY = startPos.y + (newH - startH) / 2; }
+      else if (corner === 'bl') { newW = Math.max(10, startW - dx); newH = Math.max(10, startH + dy); newX = startPos.x - (newW - startW) / 2; newY = startPos.y + (newH - startH) / 2; }
+      else if (corner === 'tr') { newW = Math.max(10, startW + dx); newH = Math.max(10, startH - dy); newX = startPos.x + (newW - startW) / 2; newY = startPos.y - (newH - startH) / 2; }
+      else if (corner === 'tl') { newW = Math.max(10, startW - dx); newH = Math.max(10, startH - dy); newX = startPos.x - (newW - startW) / 2; newY = startPos.y - (newH - startH) / 2; }
       onObjectResize(id, Math.round(newW), Math.round(newH), { x: Math.round(newX), y: Math.round(newY) });
       didMoveRef.current = true;
       return;
@@ -692,12 +716,13 @@ export function CanvasArea({
   };
 
   const handleMouseUp = () => {
+    if (drawingTransPath) return; // handled by global listener
     dragRef.current = null;
     resizeRef.current = null;
   };
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (pickingEndPoint) { onEndPointPick(getPos(e)); return; }
+    if (drawingTransPath) return;
     if (pickingAnchor) {
       const pos = getPos(e);
       const obj = selectedId ? objects.find(o => o.id === selectedId) : null;
@@ -708,11 +733,10 @@ export function CanvasArea({
           }
         : pos;
       onAnchorPick(clamped);
-      return;
     }
   };
 
-  const cursor = (pickingEndPoint || pickingAnchor) ? 'crosshair' : resizeRef.current ? 'nwse-resize' : 'default';
+  const cursor = drawingTransPath ? 'crosshair' : pickingAnchor ? 'crosshair' : resizeRef.current ? 'nwse-resize' : 'default';
 
   return (
     <canvas

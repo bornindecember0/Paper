@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import type { CanvasObject } from '../types';
 import type { Tab } from '../App';
+import { totalArcLength, resolveAbsPath } from '../pathUtils';
 
 interface Props {
   tab: Tab;
@@ -16,7 +17,7 @@ interface Props {
   onMovementOpen: (type: 'translate' | 'rotation' | 'slide') => void;
   onClearMovement: () => void;
   onSave: () => void;
-  // Rotation inline config (no modal)
+  // Rotation inline config
   rotationConfigOpen: boolean;
   rotationDegrees: number;
   rotationClockwise: boolean;
@@ -25,12 +26,21 @@ interface Props {
   onRotationPickAnchor: () => void;
   onRotationCancel: () => void;
   pickingAnchor: boolean;
+  // Fabrication settings
+  leverExposure: number;
+  onLeverExposureChange: (v: number) => void;
+  // Whether translate path drawing is active
+  drawingTransPath: boolean;
 }
 
 function movementLabel(obj: CanvasObject): string {
   const m = obj.movement;
   if (!m) return '';
-  if (m.type === 'transition') return `→ (${Math.round(m.endPoint.x)}, ${Math.round(m.endPoint.y)})`;
+  if (m.type === 'transition') {
+    const absPath = resolveAbsPath(m.path, obj.position);
+    const len = Math.round(totalArcLength(absPath));
+    return `→ path ${len}px (${m.path.length} pts)`;
+  }
   if (m.type === 'rotation') return `↻ ${m.degrees}° ${m.clockwise ? 'CW' : 'CCW'}`;
   if (m.type === 'slide') return `⇥ ${m.direction} ${m.range > 0 ? '+' : ''}${m.range}px`;
   return '';
@@ -44,6 +54,8 @@ export function RightPanel({
   onRotationDegreesChange, onRotationClockwiseChange,
   onRotationPickAnchor, onRotationCancel,
   pickingAnchor,
+  leverExposure, onLeverExposureChange,
+  drawingTransPath,
 }: Props) {
   const bgInputRef = useRef<HTMLInputElement>(null);
   const objInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -54,9 +66,8 @@ export function RightPanel({
   return (
     <aside className="right-panel">
 
-      {/* Hint */}
       <p className="panel-hint">
-      Click <strong>+</strong> to upload images as background or moving objects.  
+        Click <strong>+</strong> to upload images as background or moving objects.
       </p>
 
       {/* Background section */}
@@ -79,15 +90,7 @@ export function RightPanel({
               <>
                 <span className="image-label">Background</span>
                 {tab === 'design' && (
-                  <button
-                    type="button"
-                    className="btn-delete-object"
-                    onClick={onDeleteBackground}
-                    title="Delete background"
-                    aria-label="Delete background"
-                  >
-                    x
-                  </button>
+                  <button type="button" className="btn-delete-object" onClick={onDeleteBackground} title="Delete background" aria-label="Delete background">x</button>
                 )}
               </>
             )}
@@ -100,14 +103,8 @@ export function RightPanel({
       <div className="panel-section">
         <div className="section-header">
           <span className="section-title">Objects</span>
-          <input
-            ref={newObjInputRef} type="file" accept="image/*"
-            style={{ display: 'none' }}
-            onChange={e => {
-              const f = e.target.files?.[0];
-              if (f) { onObjectUpload(f); e.target.value = ''; }
-            }}
-          />
+          <input ref={newObjInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+            onChange={e => { const f = e.target.files?.[0]; if (f) { onObjectUpload(f); e.target.value = ''; } }} />
           <button className="btn-add" onClick={() => newObjInputRef.current?.click()} title="Add object">+</button>
         </div>
 
@@ -127,27 +124,13 @@ export function RightPanel({
               <div className="image-row-actions">
                 {!obj.locked && (
                   <>
-                    <input
-                      ref={el => { objInputRefs.current[obj.id] = el; }}
-                      type="file" accept="image/*" style={{ display: 'none' }}
-                      onChange={e => { const f = e.target.files?.[0]; if (f) { onObjectUpload(f, obj.id); e.target.value = ''; } }}
-                    />
-                    <button className="btn-import"
-                      onClick={e => { e.stopPropagation(); objInputRefs.current[obj.id]?.click(); }}>
-                      Replace
-                    </button>
+                    <input ref={el => { objInputRefs.current[obj.id] = el; }} type="file" accept="image/*" style={{ display: 'none' }}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) { onObjectUpload(f, obj.id); e.target.value = ''; } }} />
+                    <button className="btn-import" onClick={e => { e.stopPropagation(); objInputRefs.current[obj.id]?.click(); }}>Replace</button>
                   </>
                 )}
                 {tab === 'design' && (
-                  <button
-                    type="button"
-                    className="btn-delete-object"
-                    onClick={e => { e.stopPropagation(); onDeleteObject(obj.id); }}
-                    title="Delete object"
-                    aria-label="Delete object"
-                  >
-                    x
-                  </button>
+                  <button type="button" className="btn-delete-object" onClick={e => { e.stopPropagation(); onDeleteObject(obj.id); }} title="Delete object" aria-label="Delete object">x</button>
                 )}
               </div>
             </div>
@@ -169,10 +152,12 @@ export function RightPanel({
 
         <div className="movement-btns">
           <button
-            className={`btn-movement ${selectedObject?.movement?.type === 'transition' ? 'active' : ''}`}
+            className={`btn-movement ${selectedObject?.movement?.type === 'transition' || drawingTransPath ? 'active' : ''}`}
             disabled={!selectedObject || tab === 'play'}
             onClick={() => onMovementOpen('translate')}
-          >Translate</button>
+          >
+            {drawingTransPath ? 'Drawing…' : 'Translate'}
+          </button>
           <button
             className={`btn-movement ${selectedObject?.movement?.type === 'rotation' || rotationConfigOpen ? 'active' : ''}`}
             disabled={!selectedObject || tab === 'play'}
@@ -185,40 +170,30 @@ export function RightPanel({
           >Slide</button>
         </div>
 
-        {/* Rotation inline config — no modal, canvas stays visible */}
+        {/* Translate drawing hint */}
+        {drawingTransPath && (
+          <p className="form-note" style={{ marginTop: 6, color: '#2e7d32' }}>
+            Hold and drag on the canvas to draw the cut path. Release to confirm.
+          </p>
+        )}
+
+        {/* Rotation inline config */}
         {rotationConfigOpen && selectedObject && (
           <div className="rotation-config">
             <div className="rotation-config-row">
               <span className="rotation-config-label">Direction</span>
               <div className="dir-btns">
-                <button
-                  className={`dir-btn ${!rotationClockwise ? 'active' : ''}`}
-                  onClick={() => onRotationClockwiseChange(false)}
-                >CCW</button>
-                <button
-                  className={`dir-btn ${rotationClockwise ? 'active' : ''}`}
-                  onClick={() => onRotationClockwiseChange(true)}
-                >CW</button>
+                <button className={`dir-btn ${!rotationClockwise ? 'active' : ''}`} onClick={() => onRotationClockwiseChange(false)}>CCW</button>
+                <button className={`dir-btn ${rotationClockwise ? 'active' : ''}`} onClick={() => onRotationClockwiseChange(true)}>CW</button>
               </div>
             </div>
             <div className="rotation-config-row">
               <span className="rotation-config-label">Angle</span>
-              <input
-                type="number"
-                className="number-input"
-                min={1}
-                max={360}
-                value={rotationDegrees}
-                onChange={e => onRotationDegreesChange(Number(e.target.value))}
-              />
+              <input type="number" className="number-input" min={1} max={360} value={rotationDegrees} onChange={e => onRotationDegreesChange(Number(e.target.value))} />
               <span className="rotation-config-unit">°</span>
             </div>
             <div className="rotation-config-actions">
-              <button
-                className="btn btn-pick"
-                onClick={onRotationPickAnchor}
-                disabled={pickingAnchor}
-              >
+              <button className="btn btn-pick" onClick={onRotationPickAnchor} disabled={pickingAnchor}>
                 {pickingAnchor ? 'Click inside object…' : (selectedObject.movement?.type === 'rotation' ? 'Change anchor' : 'Pick anchor')}
               </button>
               <button className="btn btn-secondary" onClick={onRotationCancel}>Cancel</button>
@@ -227,12 +202,30 @@ export function RightPanel({
         )}
       </div>
 
+      {/* Fabrication settings */}
+      <div className="panel-section">
+        <div className="movement-header">Fabrication</div>
+        <div className="rotation-config-row" style={{ marginTop: 6 }}>
+          <span className="rotation-config-label">Lever exposure</span>
+          <input
+            type="range"
+            min={30}
+            max={200}
+            step={5}
+            value={leverExposure}
+            onChange={e => onLeverExposureChange(Number(e.target.value))}
+            style={{ flex: 1, margin: '0 6px' }}
+          />
+          <span className="rotation-config-unit">{leverExposure}px</span>
+        </div>
+        <p className="form-note" style={{ marginTop: 2 }}>
+          How far the lever sticks out past the canvas edge (30–200 px).
+        </p>
+      </div>
+
       {/* Save section */}
       <div className="panel-section panel-section-save">
-        <button className="btn-save" onClick={onSave}>
-          save for fabrication
-        </button>
-     
+        <button className="btn-save" onClick={onSave}>save for fabrication</button>
       </div>
     </aside>
   );
