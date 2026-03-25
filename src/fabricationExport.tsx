@@ -2,13 +2,20 @@
  * fabricationExport.ts
  *
  * Three cut-ready PNG layers:
- *   1. LEVERS     – full rod from pivot to tip (entire physical piece)
- *   2. OBJECTS    – silhouette traced from alpha channel (or rect fallback)
- *   3. BACKGROUND – bg image with:
- *                     • translation centerline
- *                     • slide strip (bg region + object composited, both cells)
- *                     • rotation anchor hole
- *                     • outer border
+ *
+ *   1. LEVERS
+ *      • Translation / rotation: full rod from pivot to tip
+ *      • Slide: full strip+tab rectangle at its t=0 resting position —
+ *        length = 2 image cells + tab + grip margin, width = object width/height
+ *
+ *   2. OBJECTS
+ *      • Every non-slide object: alpha-traced silhouette (or bounding rect)
+ *      • Every slide object: the two composited cells (bg + object image) with
+ *        cut borders, appended below the canvas region
+ *
+ *   3. BACKGROUND
+ *      • Background image with translation centerline, slide window cut-out,
+ *        rotation anchor hole, and outer border
  */
 
 import type {
@@ -32,6 +39,9 @@ const CUT_COLOR = "#000000";
 const REG_RADIUS = 10;
 const ROT_START = -Math.PI / 2;
 const TAB_THICK = 28;
+const ALPHA_THRESH = 30;
+/** Extra length beyond the strip that sticks out so you can grip the tab. */
+const GRIP_EXTRA = 40;
 
 export interface FabricationSheets {
   leversDataUrl: string;
@@ -39,37 +49,8 @@ export interface FabricationSheets {
   backgroundDataUrl: string;
 }
 
-// ─── utilities ────────────────────────────────────────────────────────────────
+// ─── image loading ────────────────────────────────────────────────────────────
 
-function drawRegMarks(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  const corners = [
-    [REG_RADIUS + 4, REG_RADIUS + 4],
-    [w - REG_RADIUS - 4, REG_RADIUS + 4],
-    [REG_RADIUS + 4, h - REG_RADIUS - 4],
-    [w - REG_RADIUS - 4, h - REG_RADIUS - 4],
-  ];
-  ctx.save();
-  ctx.strokeStyle = CUT_COLOR;
-  ctx.lineWidth = 1.2;
-  for (const [cx, cy] of corners) {
-    ctx.beginPath();
-    ctx.arc(cx, cy, REG_RADIUS, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(cx - REG_RADIUS - 4, cy);
-    ctx.lineTo(cx + REG_RADIUS + 4, cy);
-    ctx.moveTo(cx, cy - REG_RADIUS - 4);
-    ctx.lineTo(cx, cy + REG_RADIUS + 4);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-/**
- * Load an image and immediately draw it into an offscreen canvas,
- * returning both the element and a pixel-readable canvas.
- * Using an offscreen canvas avoids blob-URL taint on getImageData.
- */
 function loadImageToCanvas(url: string): Promise<{
   img: HTMLImageElement;
   off: HTMLCanvasElement;
@@ -84,9 +65,34 @@ function loadImageToCanvas(url: string): Promise<{
       resolve({ img, off });
     };
     img.onerror = reject;
-    // blob: URLs are same-origin so no crossOrigin needed, but set it anyway
     img.src = url;
   });
+}
+
+// ─── drawing helpers ──────────────────────────────────────────────────────────
+
+function drawRegMarks(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const pts = [
+    [REG_RADIUS + 4, REG_RADIUS + 4],
+    [w - REG_RADIUS - 4, REG_RADIUS + 4],
+    [REG_RADIUS + 4, h - REG_RADIUS - 4],
+    [w - REG_RADIUS - 4, h - REG_RADIUS - 4],
+  ];
+  ctx.save();
+  ctx.strokeStyle = CUT_COLOR;
+  ctx.lineWidth = 1.2;
+  for (const [cx, cy] of pts) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, REG_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx - REG_RADIUS - 4, cy);
+    ctx.lineTo(cx + REG_RADIUS + 4, cy);
+    ctx.moveTo(cx, cy - REG_RADIUS - 4);
+    ctx.lineTo(cx, cy + REG_RADIUS + 4);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function punchHole(
@@ -104,15 +110,14 @@ function punchHole(
   ctx.restore();
 }
 
-/** Draw the full rod rectangle: from → to (entire physical cut piece). */
 function drawFullRod(
   ctx: CanvasRenderingContext2D,
   from: { x: number; y: number },
   to: { x: number; y: number },
   rodWidth: number,
 ) {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
+  const dx = to.x - from.x,
+    dy = to.y - from.y;
   const len = Math.hypot(dx, dy);
   if (len < 2) return;
   const nx = -dy / len,
@@ -127,7 +132,88 @@ function drawFullRod(
   ctx.stroke();
 }
 
-// ─── lever geometry (mirrors PlayOverlay) ────────────────────────────────────
+// ─── slide strip geometry ─────────────────────────────────────────────────────
+//
+// The physical strip is two image cells joined along the movement axis, with a
+// tab (TAB_THICK) attached at the pull end plus GRIP_EXTRA of handle.
+//
+// Total piece dimensions:
+//   vertical   → width = imgW,  height = imgH * 2 + TAB_THICK + GRIP_EXTRA
+//   horizontal → width = imgW * 2 + TAB_THICK + GRIP_EXTRA, height = imgH
+//
+// At t=0 the strip is fully retracted: only the tab sits just outside the
+// canvas edge.  So we position the strip rectangle so the tab end is at the
+// canvas boundary (plus pad offset on the levers sheet).
+
+interface SlideStripGeo {
+  /** Top-left corner of the full strip rect in canvas coordinates. */
+  x: number;
+  y: number;
+  /** Total width of the strip piece. */
+  w: number;
+  /** Total height of the strip piece. */
+  h: number;
+  isVertical: boolean;
+}
+
+function slideStripGeo(
+  obj: CanvasObject,
+  canvasW: number,
+  canvasH: number,
+): SlideStripGeo {
+  const m = obj.movement as SlideMovement;
+  const isV = m.direction === "vertical";
+  const imgW = obj.width,
+    imgH = obj.height;
+
+  // Total strip length (two cells + tab + grip) along the movement axis
+  const stripLen = (isV ? imgH : imgW) * 2 + TAB_THICK + GRIP_EXTRA;
+
+  // Width perpendicular to movement
+  const stripCross = isV ? imgW : imgH;
+
+  // Window top-left in canvas coords
+  const winX = obj.position.x - imgW / 2;
+  const winY = obj.position.y - imgH / 2;
+
+  // At t=0 the strip is fully retracted so the tab just clears the canvas edge.
+  // The "pull direction" is where the tab starts, so the strip extends inward
+  // from there by stripLen.
+  //
+  // We want: rect x/y in canvas-space (levers sheet will apply a pad offset).
+
+  let rx = 0,
+    ry = 0,
+    rw = 0,
+    rh = 0;
+
+  if (isV) {
+    rw = stripCross; // = imgW
+    rh = stripLen;
+    rx = winX; // horizontally aligned with window
+    if (m.pullDirection === "down") {
+      // tab at bottom (starts below canvas at y=canvasH), strip extends upward
+      ry = canvasH - stripLen + TAB_THICK + GRIP_EXTRA;
+    } else {
+      // pull=up: tab at top (starts above canvas at y= -TAB_THICK), strip extends downward
+      ry = -(TAB_THICK + GRIP_EXTRA);
+    }
+  } else {
+    rw = stripLen;
+    rh = stripCross; // = imgH
+    ry = winY;
+    if (m.pullDirection === "right") {
+      rx = canvasW - stripLen + TAB_THICK + GRIP_EXTRA;
+    } else {
+      // pull=left
+      rx = -(TAB_THICK + GRIP_EXTRA);
+    }
+  }
+
+  return { x: rx, y: ry, w: rw, h: rh, isVertical: isV };
+}
+
+// ─── lever geometry (translation / rotation) ─────────────────────────────────
 
 function transLeverGeoAt(
   obj: CanvasObject,
@@ -181,82 +267,107 @@ function rotLeverGeoAt(
   return { pivot, tip, dims };
 }
 
-// ─── alpha contour tracing ────────────────────────────────────────────────────
-//
-// Reads pixel data from an already-drawn offscreen canvas (no blob taint issue).
-// Uses Moore neighbourhood boundary tracing to find the silhouette polygon.
-// Returns points in image-local pixel coordinates.
+// ─── alpha outline extraction (edge-stitching + RDP) ─────────────────────────
 
-function traceAlphaOutline(off: HTMLCanvasElement): { x: number; y: number }[] {
-  const W = off.width;
-  const H = off.height;
-  const ctx = off.getContext("2d")!;
-  const { data } = ctx.getImageData(0, 0, W, H);
+type Pt = { x: number; y: number };
+type Seg = { x1: number; y1: number; x2: number; y2: number };
 
-  const ALPHA_THRESHOLD = 30;
-
-  const isOpaque = (x: number, y: number): boolean => {
+function extractEdgeSegments(off: HTMLCanvasElement): Seg[] {
+  const W = off.width,
+    H = off.height;
+  const { data } = off.getContext("2d")!.getImageData(0, 0, W, H);
+  const op = (x: number, y: number) => {
     if (x < 0 || x >= W || y < 0 || y >= H) return false;
-    return data[(y * W + x) * 4 + 3] > ALPHA_THRESHOLD;
+    return data[(y * W + x) * 4 + 3] > ALPHA_THRESH;
   };
+  const segs: Seg[] = [];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (!op(x, y)) continue;
+      if (!op(x, y - 1)) segs.push({ x1: x, y1: y, x2: x + 1, y2: y });
+      if (!op(x, y + 1)) segs.push({ x1: x + 1, y1: y + 1, x2: x, y2: y + 1 });
+      if (!op(x - 1, y)) segs.push({ x1: x, y1: y + 1, x2: x, y2: y });
+      if (!op(x + 1, y)) segs.push({ x1: x + 1, y1: y, x2: x + 1, y2: y + 1 });
+    }
+  }
+  return segs;
+}
 
-  // Check whether the image has any transparency at all
+function stitchPolygons(segs: Seg[]): Pt[][] {
+  const map = new Map<string, Seg[]>();
+  for (const s of segs) {
+    const key = `${s.x1},${s.y1}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(s);
+  }
+  const used = new Set<Seg>();
+  const polys: Pt[][] = [];
+  for (const s0 of segs) {
+    if (used.has(s0)) continue;
+    const poly: Pt[] = [];
+    let cur = s0;
+    while (!used.has(cur)) {
+      used.add(cur);
+      poly.push({ x: cur.x1, y: cur.y1 });
+      const nexts = map.get(`${cur.x2},${cur.y2}`) ?? [];
+      const next = nexts.find((n) => !used.has(n));
+      if (!next) break;
+      cur = next;
+    }
+    if (poly.length >= 3) polys.push(poly);
+  }
+  return polys;
+}
+
+function rdp(pts: Pt[], epsilon: number): Pt[] {
+  if (pts.length < 3) return pts;
+  const [p1, p2] = [pts[0], pts[pts.length - 1]];
+  const dx = p2.x - p1.x,
+    dy = p2.y - p1.y;
+  const len = Math.hypot(dx, dy);
+  let maxDist = 0,
+    idx = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d =
+      len === 0
+        ? Math.hypot(pts[i].x - p1.x, pts[i].y - p1.y)
+        : Math.abs(dy * pts[i].x - dx * pts[i].y + p2.x * p1.y - p2.y * p1.x) /
+          len;
+    if (d > maxDist) {
+      maxDist = d;
+      idx = i;
+    }
+  }
+  if (maxDist > epsilon) {
+    return [
+      ...rdp(pts.slice(0, idx + 1), epsilon).slice(0, -1),
+      ...rdp(pts.slice(idx), epsilon),
+    ];
+  }
+  return [p1, p2];
+}
+
+function getAlphaPolygons(off: HTMLCanvasElement): Pt[][] {
+  const { data } = off
+    .getContext("2d")!
+    .getImageData(0, 0, off.width, off.height);
   let hasTransparent = false;
   for (let i = 3; i < data.length; i += 4) {
-    if (data[i] <= ALPHA_THRESHOLD) {
+    if (data[i] <= ALPHA_THRESH) {
       hasTransparent = true;
       break;
     }
   }
-  if (!hasTransparent) return []; // caller will use bounding rect
-
-  // Find first opaque pixel (top-to-bottom, left-to-right scan)
-  let startX = -1,
-    startY = -1;
-  outerLoop: for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      if (isOpaque(x, y)) {
-        startX = x;
-        startY = y;
-        break outerLoop;
-      }
-    }
-  }
-  if (startX === -1) return [];
-
-  // 8-directional Moore neighbourhood offsets (0=E … 7=NE)
-  const DX = [1, 1, 0, -1, -1, -1, 0, 1];
-  const DY = [0, 1, 1, 1, 0, -1, -1, -1];
-
-  const boundary: { x: number; y: number }[] = [];
-  let cx = startX,
-    cy = startY;
-  let dir = 4; // pretend we came from the west
-  const MAX_STEPS = W * H * 2;
-  let steps = 0;
-
-  do {
-    boundary.push({ x: cx, y: cy });
-    const back = (dir + 4) % 8;
-    let d = (back + 1) % 8;
-    while (!isOpaque(cx + DX[d], cy + DY[d])) {
-      d = (d + 1) % 8;
-      if (d === back) break;
-    }
-    dir = d;
-    cx += DX[d];
-    cy += DY[d];
-    steps++;
-  } while ((cx !== startX || cy !== startY) && steps < MAX_STEPS);
-
-  if (boundary.length < 3) return [];
-
-  // Downsample to ≈120 points so the stroke is clean
-  const step = Math.max(1, Math.floor(boundary.length / 120));
-  return boundary.filter((_, i) => i % step === 0);
+  if (!hasTransparent) return [];
+  return stitchPolygons(extractEdgeSegments(off))
+    .map((p) => rdp(p, 1.5))
+    .filter((p) => p.length >= 3);
 }
 
 // ─── Sheet 1: LEVERS ─────────────────────────────────────────────────────────
+//
+// Translation / rotation: full rod pivot→tip.
+// Slide: full strip+tab rectangle at t=0 resting position.
 
 function renderLeversSheet(
   objects: CanvasObject[],
@@ -266,8 +377,6 @@ function renderLeversSheet(
   const pad = 320;
   const totalW = canvasW + pad * 2;
   const totalH = canvasH + pad * 2;
-  const offX = pad,
-    offY = pad;
   const totalLeverH = 0;
 
   const canvas = document.createElement("canvas");
@@ -278,17 +387,17 @@ function renderLeversSheet(
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, totalW, totalH);
 
-  // Board boundary dashed guide
+  // Dashed canvas boundary
   ctx.save();
   ctx.strokeStyle = "#aaaaaa";
   ctx.lineWidth = 1;
   ctx.setLineDash([6, 4]);
-  ctx.strokeRect(offX, offY, canvasW, canvasH);
+  ctx.strokeRect(pad, pad, canvasW, canvasH);
   ctx.setLineDash([]);
   ctx.restore();
 
   ctx.save();
-  ctx.translate(offX, offY);
+  ctx.translate(pad, pad); // origin = canvas top-left
   ctx.strokeStyle = CUT_COLOR;
   ctx.lineWidth = CUT_STROKE;
 
@@ -308,45 +417,78 @@ function renderLeversSheet(
     }
 
     if (obj.movement.type === "slide") {
+      // Full strip rectangle — the physical piece to cut including both cells + tab + grip
+      const geo = slideStripGeo(obj, canvasW, canvasH);
+      ctx.strokeRect(geo.x, geo.y, geo.w, geo.h);
+
+      // Dashed line showing where the two image cells join (fold line reference)
       const m = obj.movement as SlideMovement;
       const isV = m.direction === "vertical";
-      const wX = obj.position.x - obj.width / 2;
-      const wY = obj.position.y - obj.height / 2;
-      const tabW = isV ? obj.width : TAB_THICK;
-      const tabH = isV ? TAB_THICK : obj.height;
-      let tabX = wX,
-        tabY = wY;
-      if (m.pullDirection === "down") tabY = canvasH;
-      else if (m.pullDirection === "up") tabY = -TAB_THICK;
-      else if (m.pullDirection === "right") tabX = canvasW;
-      else tabX = -TAB_THICK;
-      ctx.strokeRect(tabX, tabY, tabW, tabH);
+      ctx.save();
+      ctx.strokeStyle = "#888888";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      if (isV) {
+        // horizontal divider at the midpoint of the strip (where cells meet)
+        const midY = geo.y + obj.height;
+        ctx.beginPath();
+        ctx.moveTo(geo.x, midY);
+        ctx.lineTo(geo.x + geo.w, midY);
+        ctx.stroke();
+      } else {
+        const midX = geo.x + obj.width;
+        ctx.beginPath();
+        ctx.moveTo(midX, geo.y);
+        ctx.lineTo(midX, geo.y + geo.h);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
     }
   });
 
   ctx.restore();
 
-  ctx.fillStyle = "#333333";
+  ctx.fillStyle = "#333";
   ctx.font = "bold 16px sans-serif";
   ctx.fillText("LAYER 1 — LEVERS  (cut solid lines only)", 18, 22);
-
   drawRegMarks(ctx, totalW, totalH);
   return canvas.toDataURL("image/png");
 }
 
 // ─── Sheet 2: OBJECTS ────────────────────────────────────────────────────────
 //
-// For each object:
-//   • Load the image into an offscreen canvas so getImageData is readable
-//   • Trace the alpha silhouette (polygon for lasso-cropped objects)
-//   • Draw the outline scaled to the object's canvas-space dimensions
-//   • Rectangular objects (no transparency) get a plain bounding rect
+// Non-slide objects: alpha-traced silhouette at their canvas position.
+// Slide objects: two composited cells (bg region + object image) appended
+//               below the canvas region with cut borders.
 
 async function renderObjectsSheet(
+  background: string | null,
   objects: CanvasObject[],
   canvasW: number,
   canvasH: number,
 ): Promise<string> {
+  // Load all images
+  const allUrls = [
+    ...(background ? [background] : []),
+    ...objects.map((o) => o.imageUrl),
+  ];
+  const imgMap = new Map<
+    string,
+    { img: HTMLImageElement; off: HTMLCanvasElement }
+  >();
+  await Promise.all(
+    allUrls.map((url) =>
+      loadImageToCanvas(url)
+        .then((res) => imgMap.set(url, res))
+        .catch(() => {}),
+    ),
+  );
+
+  const bgEntry = background ? (imgMap.get(background) ?? null) : null;
+  const bgImg = bgEntry?.img ?? null;
+
+  // ── Main canvas area (non-slide objects) ────────────────────────────────
   const canvas = document.createElement("canvas");
   canvas.width = canvasW;
   canvas.height = canvasH;
@@ -355,13 +497,17 @@ async function renderObjectsSheet(
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  const loaded = await Promise.all(
-    objects.map((o) => loadImageToCanvas(o.imageUrl).catch(() => null)),
-  );
+  for (const obj of objects) {
+    if (obj.movement?.type === "slide") continue; // handled below
+    // Skip "after" objects of slide pairs (they appear in the strip)
+    const isAfterObj = objects.some(
+      (o) =>
+        o.movement?.type === "slide" &&
+        (o.movement as SlideMovement).secondObjectId === obj.id,
+    );
+    if (isAfterObj) continue;
 
-  for (let i = 0; i < objects.length; i++) {
-    const obj = objects[i];
-    const res = loaded[i];
+    const res = imgMap.get(obj.imageUrl);
     if (!res) continue;
 
     const { img, off } = res;
@@ -376,37 +522,33 @@ async function renderObjectsSheet(
     ctx.drawImage(img, ox, oy, obj.width, obj.height);
     ctx.restore();
 
-    // Trace silhouette from the offscreen canvas pixels
-    const localPts = traceAlphaOutline(off);
-
+    // Silhouette outline
+    const polys = getAlphaPolygons(off);
     ctx.save();
     ctx.strokeStyle = CUT_COLOR;
     ctx.lineWidth = CUT_STROKE;
-
-    if (localPts.length >= 3) {
-      // Polygon from alpha trace
-      ctx.beginPath();
-      ctx.moveTo(ox + localPts[0].x * scaleX, oy + localPts[0].y * scaleY);
-      for (let j = 1; j < localPts.length; j++) {
-        ctx.lineTo(ox + localPts[j].x * scaleX, oy + localPts[j].y * scaleY);
+    if (polys.length > 0) {
+      for (const poly of polys) {
+        ctx.beginPath();
+        ctx.moveTo(ox + poly[0].x * scaleX, oy + poly[0].y * scaleY);
+        for (let j = 1; j < poly.length; j++) {
+          ctx.lineTo(ox + poly[j].x * scaleX, oy + poly[j].y * scaleY);
+        }
+        ctx.closePath();
+        ctx.stroke();
       }
-      ctx.closePath();
-      ctx.stroke();
     } else {
-      // No transparency — plain bounding rectangle
       ctx.strokeRect(ox, oy, obj.width, obj.height);
     }
-
     ctx.restore();
 
-    // Rotation anchor hole
     if (obj.movement?.type === "rotation") {
       const anchor = getRotationAnchor(obj);
       punchHole(ctx, anchor.x, anchor.y, 4);
     }
   }
 
-  // Dashed canvas boundary guide
+  // Dashed canvas boundary
   ctx.save();
   ctx.strokeStyle = "#aaaaaa";
   ctx.lineWidth = 1;
@@ -415,25 +557,125 @@ async function renderObjectsSheet(
   ctx.setLineDash([]);
   ctx.restore();
 
-  ctx.fillStyle = "#333333";
+  ctx.fillStyle = "#333";
   ctx.font = "bold 16px sans-serif";
   ctx.fillText("LAYER 2 — OBJECTS  (cut solid lines only)", 10, 20);
-
   drawRegMarks(ctx, canvasW, canvasH);
-  return canvas.toDataURL("image/png");
+
+  // ── Slide strips appended below ─────────────────────────────────────────
+  const slideObjs = objects.filter((o) => o.movement?.type === "slide");
+  if (slideObjs.length === 0) return canvas.toDataURL("image/png");
+
+  const LABEL_H = 28,
+    GAP = 16;
+  let extraH = GAP;
+  for (const obj of slideObjs) {
+    const m = obj.movement as SlideMovement;
+    const isV = m.direction === "vertical";
+    extraH += LABEL_H + (isV ? obj.height * 2 : obj.height) + GAP;
+  }
+
+  const combined = document.createElement("canvas");
+  combined.width = canvasW;
+  combined.height = canvasH + extraH;
+  const cctx = combined.getContext("2d")!;
+  cctx.drawImage(canvas, 0, 0);
+
+  let yOff = canvasH + GAP;
+
+  for (const obj of slideObjs) {
+    const m = obj.movement as SlideMovement;
+    const isV = m.direction === "vertical";
+    const imgW = obj.width,
+      imgH = obj.height;
+    const winX = obj.position.x - imgW / 2;
+    const winY = obj.position.y - imgH / 2;
+    const afterObj = objects.find((o) => o.id === m.secondObjectId);
+    const beforeImg = imgMap.get(obj.imageUrl)?.img ?? null;
+    const afterImg = afterObj
+      ? (imgMap.get(afterObj.imageUrl)?.img ?? null)
+      : null;
+
+    // Label
+    cctx.fillStyle = "#333";
+    cctx.font = "bold 13px sans-serif";
+    cctx.fillText(
+      `Slide strip — ${isV ? "vertical" : "horizontal"}  |  before (top/left) · after (bottom/right)`,
+      8,
+      yOff + 16,
+    );
+    yOff += LABEL_H;
+
+    // Two cells: before on the side that ends in the window, after on the far side
+    // Match CanvasArea play-mode ordering:
+    //   pull=down or pull=right → [after, before] (after is pulled in first)
+    //   pull=up   or pull=left  → [after, before] same ordering
+    // Both cells are imgW × imgH.
+    type Cell = { imgEl: HTMLImageElement | null; cx: number; cy: number };
+    const cells: Cell[] = isV
+      ? [
+          { imgEl: afterImg, cx: 0, cy: yOff },
+          { imgEl: beforeImg, cx: 0, cy: yOff + imgH },
+        ]
+      : [
+          { imgEl: afterImg, cx: 0, cy: yOff },
+          { imgEl: beforeImg, cx: imgW, cy: yOff },
+        ];
+
+    for (const cell of cells) {
+      cctx.save();
+      cctx.beginPath();
+      cctx.rect(cell.cx, cell.cy, imgW, imgH);
+      cctx.clip();
+
+      // Background region (same slice that sits behind the window)
+      if (bgImg) {
+        const scaleX = bgImg.naturalWidth / canvasW;
+        const scaleY = bgImg.naturalHeight / canvasH;
+        cctx.drawImage(
+          bgImg,
+          winX * scaleX,
+          winY * scaleY,
+          imgW * scaleX,
+          imgH * scaleY,
+          cell.cx,
+          cell.cy,
+          imgW,
+          imgH,
+        );
+      } else {
+        cctx.fillStyle = "#ffffff";
+        cctx.fillRect(cell.cx, cell.cy, imgW, imgH);
+      }
+
+      // Object image on top
+      if (cell.imgEl) {
+        cctx.drawImage(cell.imgEl, cell.cx, cell.cy, imgW, imgH);
+      }
+
+      cctx.restore();
+
+      // Cut border
+      cctx.save();
+      cctx.strokeStyle = CUT_COLOR;
+      cctx.lineWidth = CUT_STROKE;
+      cctx.strokeRect(cell.cx, cell.cy, imgW, imgH);
+      cctx.restore();
+    }
+
+    yOff += isV ? imgH * 2 + GAP : imgH + GAP;
+  }
+
+  return combined.toDataURL("image/png");
 }
 
 // ─── Sheet 3: BACKGROUND ─────────────────────────────────────────────────────
 //
-// Slide handling: the strip needs to print correctly so the background region
-// and the object both appear in the window when assembled.
-//
-// For each slide object we render TWO cells side-by-side (or stacked) on a
-// separate strip canvas, matching exactly what CanvasArea does in play mode:
-//   cell A = background-region-of-the-window + "after" object image on top
-//   cell B = background-region-of-the-window + "before" object image on top
-// Each cell is imgW × imgH.  The strip is printed separately so it can be
-// slotted behind the background cut-out.
+// Background image with:
+//   • Translation centerline (thin line from start to end)
+//   • Slide window cut-out (rectangle where the strip peeks through)
+//   • Rotation anchor hole
+//   • Outer border cut
 
 async function renderBackgroundSheet(
   background: string | null,
@@ -441,23 +683,11 @@ async function renderBackgroundSheet(
   canvasW: number,
   canvasH: number,
 ): Promise<string> {
-  // Load all images up front
-  const allUrls = [
-    ...(background ? [background] : []),
-    ...objects.map((o) => o.imageUrl),
-  ];
-  const imageMap = new Map<string, HTMLImageElement>();
-  await Promise.all(
-    allUrls.map((url) =>
-      loadImageToCanvas(url)
-        .then(({ img }) => imageMap.set(url, img))
-        .catch(() => {}),
-    ),
-  );
+  const bgEntry = background
+    ? await loadImageToCanvas(background).catch(() => null)
+    : null;
+  const bgImg = bgEntry?.img ?? null;
 
-  const bgImg = background ? (imageMap.get(background) ?? null) : null;
-
-  // ── Main background canvas ──────────────────────────────────────────────
   const canvas = document.createElement("canvas");
   canvas.width = canvasW;
   canvas.height = canvasH;
@@ -470,11 +700,9 @@ async function renderBackgroundSheet(
     ctx.fillRect(0, 0, canvasW, canvasH);
   }
 
-  // ── Per-object marks ────────────────────────────────────────────────────
   objects.forEach((obj) => {
     if (!obj.movement) return;
 
-    // Translation: thin centerline
     if (obj.movement.type === "transition") {
       const m = obj.movement as TransitionMovement;
       ctx.save();
@@ -489,7 +717,6 @@ async function renderBackgroundSheet(
       ctx.restore();
     }
 
-    // Slide: cut-out window on the background
     if (obj.movement.type === "slide") {
       const wx = obj.position.x - obj.width / 2;
       const wy = obj.position.y - obj.height / 2;
@@ -500,147 +727,24 @@ async function renderBackgroundSheet(
       ctx.restore();
     }
 
-    // Rotation: anchor hole
     if (obj.movement.type === "rotation") {
       const anchor = getRotationAnchor(obj);
       punchHole(ctx, anchor.x, anchor.y, 5);
     }
   });
 
-  // Outer border
   ctx.save();
   ctx.strokeStyle = CUT_COLOR;
   ctx.lineWidth = CUT_STROKE;
   ctx.strokeRect(1, 1, canvasW - 2, canvasH - 2);
   ctx.restore();
 
-  ctx.fillStyle = "#333333";
+  ctx.fillStyle = "#333";
   ctx.font = "bold 16px sans-serif";
   ctx.fillText("LAYER 3 — BACKGROUND  (cut solid lines only)", 10, 20);
   drawRegMarks(ctx, canvasW, canvasH);
 
-  // ── Slide strip canvases (one per slide object, appended below) ─────────
-  //
-  // Each strip contains two cells [before | after] (or [after | before]
-  // depending on pull direction) with the background region composited first
-  // then the object image on top — exactly matching CanvasArea play mode.
-  //
-  // We composite everything onto a single tall PNG that includes the main
-  // background at the top and all strips stacked below it.
-
-  const slideObjs = objects.filter((o) => o.movement?.type === "slide");
-
-  if (slideObjs.length === 0) {
-    return canvas.toDataURL("image/png");
-  }
-
-  // Calculate total height needed
-  const STRIP_LABEL_H = 28;
-  const STRIP_GAP = 16;
-  let extraH = STRIP_GAP;
-  for (const obj of slideObjs) {
-    const m = obj.movement as SlideMovement;
-    const isV = m.direction === "vertical";
-    extraH += STRIP_LABEL_H + (isV ? obj.height * 2 : obj.height) + STRIP_GAP;
-  }
-
-  const combined = document.createElement("canvas");
-  combined.width = canvasW;
-  combined.height = canvasH + extraH;
-  const cctx = combined.getContext("2d")!;
-
-  // Copy main background
-  cctx.drawImage(canvas, 0, 0);
-
-  let yOffset = canvasH + STRIP_GAP;
-
-  for (const obj of slideObjs) {
-    const m = obj.movement as SlideMovement;
-    const isV = m.direction === "vertical";
-    const imgW = obj.width;
-    const imgH = obj.height;
-    const winX = obj.position.x - imgW / 2;
-    const winY = obj.position.y - imgH / 2;
-
-    const afterObj = objects.find((o) => o.id === m.secondObjectId);
-    const beforeImg = imageMap.get(obj.imageUrl) ?? null;
-    const afterImg = afterObj
-      ? (imageMap.get(afterObj.imageUrl) ?? null)
-      : null;
-
-    // Strip label
-    cctx.fillStyle = "#333333";
-    cctx.font = "bold 13px sans-serif";
-    cctx.fillText(
-      `Slide strip — ${isV ? "vertical" : "horizontal"} (before ← left/top, after → right/bottom)`,
-      8,
-      yOffset + 16,
-    );
-    yOffset += STRIP_LABEL_H;
-
-    // Build the two cells
-    type Cell = { imgEl: HTMLImageElement | null; x: number; y: number };
-    let cells: Cell[];
-
-    if (isV) {
-      // Stack vertically: cell0 at top, cell1 below
-      cells = [
-        { imgEl: afterImg, x: 0, y: yOffset },
-        { imgEl: beforeImg, x: 0, y: yOffset + imgH },
-      ];
-    } else {
-      // Side by side: cell0 left, cell1 right
-      cells = [
-        { imgEl: afterImg, x: 0, y: yOffset },
-        { imgEl: beforeImg, x: imgW, y: yOffset },
-      ];
-    }
-
-    for (const cell of cells) {
-      cctx.save();
-      cctx.beginPath();
-      cctx.rect(cell.x, cell.y, imgW, imgH);
-      cctx.clip();
-
-      // Background region (the same slice of the bg that sits behind the window)
-      if (bgImg) {
-        const scaleX = bgImg.naturalWidth / canvasW;
-        const scaleY = bgImg.naturalHeight / canvasH;
-        cctx.drawImage(
-          bgImg,
-          winX * scaleX,
-          winY * scaleY,
-          imgW * scaleX,
-          imgH * scaleY,
-          cell.x,
-          cell.y,
-          imgW,
-          imgH,
-        );
-      } else {
-        cctx.fillStyle = "#ffffff";
-        cctx.fillRect(cell.x, cell.y, imgW, imgH);
-      }
-
-      // Object image on top
-      if (cell.imgEl) {
-        cctx.drawImage(cell.imgEl, cell.x, cell.y, imgW, imgH);
-      }
-
-      cctx.restore();
-
-      // Cell border (cut line)
-      cctx.save();
-      cctx.strokeStyle = CUT_COLOR;
-      cctx.lineWidth = CUT_STROKE;
-      cctx.strokeRect(cell.x, cell.y, imgW, imgH);
-      cctx.restore();
-    }
-
-    yOffset += isV ? imgH * 2 + STRIP_GAP : imgH + STRIP_GAP;
-  }
-
-  return combined.toDataURL("image/png");
+  return canvas.toDataURL("image/png");
 }
 
 // ─── main entry ──────────────────────────────────────────────────────────────
@@ -653,7 +757,7 @@ export async function buildFabricationSheets(
 ): Promise<FabricationSheets> {
   const [leversDataUrl, objectsDataUrl, backgroundDataUrl] = await Promise.all([
     Promise.resolve(renderLeversSheet(objects, canvasW, canvasH)),
-    renderObjectsSheet(objects, canvasW, canvasH),
+    renderObjectsSheet(background, objects, canvasW, canvasH),
     renderBackgroundSheet(background, objects, canvasW, canvasH),
   ]);
   return { leversDataUrl, objectsDataUrl, backgroundDataUrl };
