@@ -426,7 +426,7 @@ function renderLeversSheet(
         revealRatio,
       );
       drawFullRod(ctx, geo.pivot, geo.tip, geo.dims.rodWidth);
-      punchHole(ctx, geo.pivot.x, geo.pivot.y, geo.dims.rodWidth * 0.3);
+      //punchHole(ctx, geo.pivot.x, geo.pivot.y, geo.dims.rodWidth * 0.3);
     }
 
     if (obj.movement.type === "rotation") {
