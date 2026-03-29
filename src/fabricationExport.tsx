@@ -22,7 +22,6 @@ import type {
   CanvasObject,
   SlideMovement,
   TransitionMovement,
-  RotationMovement,
 } from "./types";
 import {
   getTransitionDims,
@@ -30,7 +29,7 @@ import {
   getRotationAnchor,
   getPathDir,
   chooseOutwardNormal,
-  rayExitDistanceToBoard,
+  FABRICATION_LEVER_SHEET_PAD,
 } from "./leverGeometry";
 
 // ─── constants ────────────────────────────────────────────────────────────────
@@ -221,9 +220,16 @@ function transLeverGeoAt(
   totalLeverH: number,
   canvasW: number,
   canvasH: number,
+  revealRatio: number,
 ) {
   const m = obj.movement as TransitionMovement;
-  const dims = getTransitionDims(obj, totalLeverH, canvasW, canvasH);
+  const dims = getTransitionDims(
+    obj,
+    totalLeverH,
+    canvasW,
+    canvasH,
+    revealRatio,
+  );
   const dirX = m.endPoint.x - obj.position.x;
   const dirY = m.endPoint.y - obj.position.y;
   const animX = obj.position.x + dirX * t;
@@ -233,9 +239,8 @@ function transLeverGeoAt(
     bR = canvasW,
     bB = totalLeverH + canvasH;
   const { tx, ty } = getPathDir(obj);
-  const midX = (obj.position.x + m.endPoint.x) / 2 + obj.width / 2;
-  const midY =
-    totalLeverH + (obj.position.y + m.endPoint.y) / 2 + obj.height / 2;
+  const midX = (obj.position.x + m.endPoint.x) / 2;
+  const midY = totalLeverH + (obj.position.y + m.endPoint.y) / 2;
   const out = chooseOutwardNormal(midX, midY, -ty, tx, ty, -tx, bL, bT, bR, bB);
   const pivot = { x: animX, y: totalLeverH + animY };
   const tip = {
@@ -251,10 +256,16 @@ function rotLeverGeoAt(
   totalLeverH: number,
   canvasW: number,
   canvasH: number,
+  revealRatio: number,
 ) {
-  const m = obj.movement as RotationMovement;
-  const dims = getRotationDims(obj, totalLeverH, canvasW, canvasH);
-  const totalDegRad = (m.degrees * (m.clockwise ? 1 : -1) * Math.PI) / 180;
+  const dims = getRotationDims(
+    obj,
+    totalLeverH,
+    canvasW,
+    canvasH,
+    revealRatio,
+  );
+  const totalDegRad = Math.PI * 2;
   const angle = ROT_START + t * totalDegRad;
   const dx = Math.cos(angle),
     dy = Math.sin(angle);
@@ -373,8 +384,9 @@ function renderLeversSheet(
   objects: CanvasObject[],
   canvasW: number,
   canvasH: number,
+  revealRatio: number,
 ): string {
-  const pad = 320;
+  const pad = FABRICATION_LEVER_SHEET_PAD;
   const totalW = canvasW + pad * 2;
   const totalH = canvasH + pad * 2;
   const totalLeverH = 0;
@@ -405,13 +417,27 @@ function renderLeversSheet(
     if (!obj.movement) return;
 
     if (obj.movement.type === "transition") {
-      const geo = transLeverGeoAt(obj, 0, totalLeverH, canvasW, canvasH);
+      const geo = transLeverGeoAt(
+        obj,
+        0,
+        totalLeverH,
+        canvasW,
+        canvasH,
+        revealRatio,
+      );
       drawFullRod(ctx, geo.pivot, geo.tip, geo.dims.rodWidth);
       punchHole(ctx, geo.pivot.x, geo.pivot.y, geo.dims.rodWidth * 0.3);
     }
 
     if (obj.movement.type === "rotation") {
-      const geo = rotLeverGeoAt(obj, 0, totalLeverH, canvasW, canvasH);
+      const geo = rotLeverGeoAt(
+        obj,
+        0,
+        totalLeverH,
+        canvasW,
+        canvasH,
+        revealRatio,
+      );
       drawFullRod(ctx, geo.pivot, geo.tip, geo.dims.rodWidth);
       punchHole(ctx, geo.pivot.x, geo.pivot.y, geo.dims.rodWidth * 0.3);
     }
@@ -516,11 +542,9 @@ async function renderObjectsSheet(
     const scaleX = obj.width / img.naturalWidth;
     const scaleY = obj.height / img.naturalHeight;
 
-    // Ghost reference
-    ctx.save();
-    ctx.globalAlpha = 0.25;
+    // Draw the source art at full opacity so the cut outline is visible
+    // without the previous semi-transparent "shadow" effect.
     ctx.drawImage(img, ox, oy, obj.width, obj.height);
-    ctx.restore();
 
     // Silhouette outline
     const polys = getAlphaPolygons(off);
@@ -754,9 +778,12 @@ export async function buildFabricationSheets(
   objects: CanvasObject[],
   canvasW: number,
   canvasH: number,
+  revealRatio: number,
 ): Promise<FabricationSheets> {
   const [leversDataUrl, objectsDataUrl, backgroundDataUrl] = await Promise.all([
-    Promise.resolve(renderLeversSheet(objects, canvasW, canvasH)),
+    Promise.resolve(
+      renderLeversSheet(objects, canvasW, canvasH, revealRatio),
+    ),
     renderObjectsSheet(background, objects, canvasW, canvasH),
     renderBackgroundSheet(background, objects, canvasW, canvasH),
   ]);

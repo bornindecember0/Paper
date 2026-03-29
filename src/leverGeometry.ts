@@ -8,9 +8,140 @@ import type { RotationMovement, TransitionMovement } from './types';
 export const LEVER_ROW_H = 100;
 export const DEFAULT_LEVER_LENGTH = 180;
 export const DEFAULT_LEVER_WIDTH = 18;
+export const DEFAULT_LEVER_REVEAL_RATIO = 0.5;
 
 const LEVER_LENGTH_MIN = 140;
-const LEVER_LENGTH_MAX_TRANS = 420;
+const TRANSITION_EXIT_SAMPLES = 81;
+const TRANSITION_EXIT_SAFETY = 12;
+const LEVER_SAFE_MAX_FACTOR = 0.85;
+
+/** Must match levers sheet padding in fabricationExport (translate before drawing). */
+export const FABRICATION_LEVER_SHEET_PAD = 320;
+
+/**
+ * Max distance from pivot along unit (nx, ny) before the lever tip leaves the
+ * fabrication sheet (including pad), with edge margin for reg marks / stroke.
+ * Coordinates match canvas space after ctx.translate(pad, pad): inner canvas is [0,cw]×[0,ch].
+ */
+function maxLeverToFabricationSheetEdge(
+  px: number,
+  py: number,
+  nx: number,
+  ny: number,
+  canvasW: number,
+  canvasH: number,
+  pad: number,
+  edgeMargin: number,
+): number {
+  let cap = Infinity;
+  if (Math.abs(nx) > 1e-9) {
+    if (nx > 0) {
+      cap = Math.min(cap, (canvasW + pad - edgeMargin - px) / nx);
+    } else {
+      cap = Math.min(cap, (pad + px - edgeMargin) / (-nx));
+    }
+  } else {
+    const xAbs = pad + px;
+    if (xAbs < edgeMargin || xAbs > canvasW + 2 * pad - edgeMargin) {
+      cap = 0;
+    }
+  }
+  if (Math.abs(ny) > 1e-9) {
+    if (ny > 0) {
+      cap = Math.min(cap, (canvasH + pad - edgeMargin - py) / ny);
+    } else {
+      cap = Math.min(cap, (pad + py - edgeMargin) / (-ny));
+    }
+  } else {
+    const yAbs = pad + py;
+    if (yAbs < edgeMargin || yAbs > canvasH + 2 * pad - edgeMargin) {
+      cap = 0;
+    }
+  }
+  if (!Number.isFinite(cap) || cap < 0) return 0;
+  return cap;
+}
+
+function transitionFabricationSheetLeverCap(
+  obj: CanvasObject,
+  totalLeverH: number,
+  canvasW: number,
+  canvasH: number,
+  rodWidth: number,
+): number {
+  const m = obj.movement as TransitionMovement;
+  const dirX = m.endPoint.x - obj.position.x;
+  const dirY = m.endPoint.y - obj.position.y;
+  const boardLeft = 0;
+  const boardTop = totalLeverH;
+  const boardRight = canvasW;
+  const boardBottom = totalLeverH + canvasH;
+  const { tx, ty } = getPathDir(obj);
+  const nx1 = -ty;
+  const ny1 = tx;
+  const nx2 = ty;
+  const ny2 = -tx;
+  const midX = (obj.position.x + m.endPoint.x) / 2;
+  const midY = totalLeverH + (obj.position.y + m.endPoint.y) / 2;
+  const outward = chooseOutwardNormal(
+    midX,
+    midY,
+    nx1,
+    ny1,
+    nx2,
+    ny2,
+    boardLeft,
+    boardTop,
+    boardRight,
+    boardBottom,
+  );
+  const edgeMargin = 36 + rodWidth * 0.5;
+  let minAlongPath = Infinity;
+  for (let i = 0; i <= TRANSITION_EXIT_SAMPLES; i++) {
+    const t = i / TRANSITION_EXIT_SAMPLES;
+    const px = obj.position.x + dirX * t;
+    const py = totalLeverH + obj.position.y + dirY * t;
+    const cap = maxLeverToFabricationSheetEdge(
+      px,
+      py,
+      outward.nx,
+      outward.ny,
+      canvasW,
+      canvasH,
+      FABRICATION_LEVER_SHEET_PAD,
+      edgeMargin,
+    );
+    minAlongPath = Math.min(minAlongPath, cap);
+  }
+  return minAlongPath;
+}
+
+/** Rotation lever at t=0 uses angle -π/2 → direction (0, -1) in canvas coords. */
+function rotationFabricationSheetLeverCap(
+  obj: CanvasObject,
+  totalLeverH: number,
+  canvasW: number,
+  canvasH: number,
+  rodWidth: number,
+): number {
+  const anchor = getRotationAnchor(obj);
+  const px = anchor.x;
+  const py = totalLeverH + anchor.y;
+  const edgeMargin = 36 + rodWidth * 0.5;
+  const ROT_START = -Math.PI / 2;
+  const nx = Math.cos(ROT_START);
+  const ny = Math.sin(ROT_START);
+  return maxLeverToFabricationSheetEdge(
+    px,
+    py,
+    nx,
+    ny,
+    canvasW,
+    canvasH,
+    FABRICATION_LEVER_SHEET_PAD,
+    edgeMargin,
+  );
+}
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -18,6 +149,10 @@ function clamp(v: number, lo: number, hi: number): number {
 
 function hypot2(x: number, y: number): number {
   return Math.hypot(x, y) || 1;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
 }
 
 export function rayExitDistanceToBoard(
@@ -75,11 +210,12 @@ function estimateTransitionMaxExitDist(
   const ny1 = tx;
   const nx2 = ty;
   const ny2 = -tx;
-  const midX = (obj.position.x + m.endPoint.x) / 2 + obj.width / 2;
-  const midY = totalLeverH + (obj.position.y + m.endPoint.y) / 2 + obj.height / 2;
+  const midX = (obj.position.x + m.endPoint.x) / 2;
+  const midY = totalLeverH + (obj.position.y + m.endPoint.y) / 2;
   const outward = chooseOutwardNormal(midX, midY, nx1, ny1, nx2, ny2, boardLeft, boardTop, boardRight, boardBottom);
   let maxExit = 0;
-  for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+  for (let i = 0; i <= TRANSITION_EXIT_SAMPLES; i++) {
+    const t = i / TRANSITION_EXIT_SAMPLES;
     const pivot = {
       x: obj.position.x + dirX * t,
       y: totalLeverH + obj.position.y + dirY * t,
@@ -96,6 +232,7 @@ export function getTransitionDims(
   totalLeverH: number,
   canvasW: number,
   canvasH: number,
+  revealRatio = DEFAULT_LEVER_REVEAL_RATIO,
 ): { leverLength: number; rodWidth: number } {
   const m = obj.movement as TransitionMovement;
   const dx = m.endPoint.x - obj.position.x;
@@ -106,11 +243,36 @@ export function getTransitionDims(
   const rodWidth = clamp(shortSide * 0.16, 14, 28);
   const maxExitDist = estimateTransitionMaxExitDist(obj, totalLeverH, canvasW, canvasH);
   const minExpose = Math.max(rodWidth * 2.5, 36);
-  const leverLength = clamp(
-    Math.max(longSide * 1.1, travel * 0.8, maxExitDist + minExpose, DEFAULT_LEVER_LENGTH),
+  const diagonalCap = Math.max(
     LEVER_LENGTH_MIN,
-    LEVER_LENGTH_MAX_TRANS,
+    Math.ceil(Math.hypot(canvasW, canvasH) * LEVER_SAFE_MAX_FACTOR),
   );
+  const sheetCap = transitionFabricationSheetLeverCap(
+    obj,
+    totalLeverH,
+    canvasW,
+    canvasH,
+    rodWidth,
+  );
+  const safeMaxLength = Math.max(
+    LEVER_LENGTH_MIN,
+    Math.min(diagonalCap, sheetCap),
+  );
+  const baseLength = clamp(
+    Math.max(
+      longSide * 1.1,
+      travel * 0.8,
+      maxExitDist + minExpose + TRANSITION_EXIT_SAFETY,
+      DEFAULT_LEVER_LENGTH,
+    ),
+    LEVER_LENGTH_MIN,
+    safeMaxLength,
+  );
+  const t = clamp(revealRatio, 0, 1);
+  const leverLength =
+    baseLength >= safeMaxLength
+      ? baseLength
+      : lerp(baseLength, safeMaxLength, t);
   return { leverLength, rodWidth };
 }
 
@@ -151,6 +313,7 @@ export function getRotationDims(
   totalLeverH: number,
   canvasW: number,
   canvasH: number,
+  revealRatio = DEFAULT_LEVER_REVEAL_RATIO,
 ): { leverLength: number; rodWidth: number } {
   const anchor = getRotationAnchor(obj);
   const shortSide = Math.max(1, Math.min(obj.width, obj.height));
@@ -158,12 +321,31 @@ export function getRotationDims(
   const maxExitDist = estimateRotationMaxExitDist(anchor, totalLeverH, canvasW, canvasH);
   const minExpose = Math.max(rodWidth * 2.5, 36);
   const longSide = Math.max(obj.width, obj.height);
-  const maxLever = Math.ceil(Math.hypot(canvasW, canvasH) * 0.85);
-  const leverLength = clamp(
+  const diagonalCap = Math.max(
+    LEVER_LENGTH_MIN,
+    Math.ceil(Math.hypot(canvasW, canvasH) * LEVER_SAFE_MAX_FACTOR),
+  );
+  const sheetCap = rotationFabricationSheetLeverCap(
+    obj,
+    totalLeverH,
+    canvasW,
+    canvasH,
+    rodWidth,
+  );
+  const safeMaxLength = Math.max(
+    LEVER_LENGTH_MIN,
+    Math.min(diagonalCap, sheetCap),
+  );
+  const baseLength = clamp(
     Math.max(longSide * 1.1, maxExitDist + minExpose, DEFAULT_LEVER_LENGTH),
     LEVER_LENGTH_MIN,
-    maxLever,
+    safeMaxLength,
   );
+  const t = clamp(revealRatio, 0, 1);
+  const leverLength =
+    baseLength >= safeMaxLength
+      ? baseLength
+      : lerp(baseLength, safeMaxLength, t);
   return { leverLength, rodWidth };
 }
 

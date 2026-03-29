@@ -18,7 +18,6 @@ export interface ExportMovementRotation {
   anchorOffset: { x: number; y: number };
   anchorAbsolute: { x: number; y: number };
   degrees: number;
-  clockwise: boolean;
   leverLength: number;
   rodWidth: number;
 }
@@ -49,6 +48,7 @@ export interface ExportObjectEntry {
 export interface BuildExportOptions {
   canvasW: number;
   canvasH: number;
+  revealRatio?: number;
 }
 
 /**
@@ -59,7 +59,7 @@ export function buildExportData(
   objects: CanvasObject[],
   options: BuildExportOptions,
 ): ExportObjectEntry[] {
-  const { canvasW, canvasH } = options;
+  const { canvasW, canvasH, revealRatio } = options;
   const objectsWithMovement = objects.filter((o): o is CanvasObject & { movement: Movement } => !!o.movement);
   const slideCount = objectsWithMovement.filter(o => o.movement.type === 'slide').length;
   const totalLeverH = slideCount * LEVER_ROW_H;
@@ -69,7 +69,13 @@ export function buildExportData(
     const base = { id, filename, position: { ...position }, width, height };
 
     if (movement.type === 'transition') {
-      const dims = getTransitionDims(obj, totalLeverH, canvasW, canvasH);
+      const dims = getTransitionDims(
+        obj,
+        totalLeverH,
+        canvasW,
+        canvasH,
+        revealRatio,
+      );
       return {
         ...base,
         movement: {
@@ -83,7 +89,13 @@ export function buildExportData(
     }
 
     if (movement.type === 'rotation') {
-      const dims = getRotationDims(obj, totalLeverH, canvasW, canvasH);
+      const dims = getRotationDims(
+        obj,
+        totalLeverH,
+        canvasW,
+        canvasH,
+        revealRatio,
+      );
       const anchorAbsolute = getRotationAnchor(obj);
       return {
         ...base,
@@ -91,8 +103,7 @@ export function buildExportData(
           type: 'rotation',
           anchorOffset: { ...movement.anchorPoint },
           anchorAbsolute: { x: anchorAbsolute.x, y: anchorAbsolute.y },
-          degrees: movement.degrees,
-          clockwise: movement.clockwise,
+          degrees: 360,
           leverLength: dims.leverLength,
           rodWidth: dims.rodWidth,
         },
@@ -150,14 +161,19 @@ export interface SaveSceneOptions {
   objects: CanvasObject[];
   canvasW: number;
   canvasH: number;
+  revealRatio?: number;
 }
 
 /**
  * Build full save payload with base64 image data for background and all objects.
  */
 export async function buildSavePayload(options: SaveSceneOptions): Promise<SavePayload> {
-  const { background, bgFilename, objects, canvasW, canvasH } = options;
-  const exportData = buildExportData(objects, { canvasW, canvasH });
+  const { background, bgFilename, objects, canvasW, canvasH, revealRatio } = options;
+  const exportData = buildExportData(objects, {
+    canvasW,
+    canvasH,
+    revealRatio,
+  });
   const exportById = new Map(exportData.map(e => [e.id, e]));
 
   const objectEntries = await Promise.all(

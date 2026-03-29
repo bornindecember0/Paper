@@ -11,6 +11,7 @@ import { CropModal } from "./components/CropModal";
 import { ObjectCropModal } from "./components/ObjectCropModal";
 import { PlayOverlay, getLeverAreaH } from "./components/PlayOverlay";
 import { FabricationPage } from "./components/FabricationPage"; // ← new
+import { DEFAULT_LEVER_REVEAL_RATIO } from "./leverGeometry";
 import type { CanvasObject, Position } from "./types";
 
 export type Tab = "design" | "play";
@@ -36,9 +37,10 @@ export default function App() {
   const [pickingEndPoint, setPickingEndPoint] = useState(false);
   const [pickingAnchor, setPickingAnchor] = useState(false);
   const [rotationConfigOpen, setRotationConfigOpen] = useState(false);
-  const [rotationDegrees, setRotationDegrees] = useState(360);
-  const [rotationClockwise, setRotationClockwise] = useState(true);
   const [sliderValues, setSliderValues] = useState<Record<string, number>>({});
+  const [leverRevealRatio, setLeverRevealRatio] = useState(
+    DEFAULT_LEVER_REVEAL_RATIO,
+  );
   const [showFabrication, setShowFabrication] = useState(false); // ← new
 
   const selectedObject = objects.find((o) => o.id === selectedId);
@@ -179,8 +181,6 @@ export default function App() {
             movement: {
               type: "rotation",
               anchorPoint: anchorOffset,
-              degrees: rotationDegrees,
-              clockwise: rotationClockwise,
             },
           };
         }),
@@ -188,7 +188,7 @@ export default function App() {
       setPickingAnchor(false);
       setRotationConfigOpen(false);
     },
-    [selectedId, rotationDegrees, rotationClockwise],
+    [selectedId],
   );
 
   const handleSlideConfirm = useCallback(
@@ -253,12 +253,6 @@ export default function App() {
       if (type === "translate") {
         setPickingEndPoint(true);
       } else if (type === "rotation") {
-        const rot =
-          selectedObject?.movement?.type === "rotation"
-            ? selectedObject.movement
-            : undefined;
-        setRotationDegrees(rot?.degrees ?? 360);
-        setRotationClockwise(rot?.clockwise ?? true);
         setRotationConfigOpen(true);
         setPickingAnchor(false);
       } else {
@@ -305,6 +299,7 @@ export default function App() {
         objects={objects}
         canvasW={CANVAS_W}
         canvasH={CANVAS_H}
+        revealRatio={leverRevealRatio}
         onClose={() => setShowFabrication(false)}
       />
     );
@@ -333,7 +328,7 @@ export default function App() {
           <div className="picking-hint">
             {pickingEndPoint
               ? "Click on the canvas to set the end point"
-              : "Click inside the object to set the rotation anchor"}
+              : "Click inside the selected object to set the rotation anchor."}
             <button
               className="picking-cancel"
               onClick={() => {
@@ -389,6 +384,7 @@ export default function App() {
                   sliderValues={sliderValues}
                   canvasW={CANVAS_W}
                   canvasH={CANVAS_H}
+                  revealRatio={leverRevealRatio}
                   onChange={handleSliderChange}
                 />
                 <div
@@ -469,11 +465,9 @@ export default function App() {
         onMovementOpen={handleMovementOpen}
         onClearMovement={handleClearMovement}
         onSave={handleSave}
+        revealRatio={leverRevealRatio}
+        onRevealRatioChange={setLeverRevealRatio}
         rotationConfigOpen={rotationConfigOpen}
-        rotationDegrees={rotationDegrees}
-        rotationClockwise={rotationClockwise}
-        onRotationDegreesChange={setRotationDegrees}
-        onRotationClockwiseChange={setRotationClockwise}
         onRotationPickAnchor={() => setPickingAnchor(true)}
         onRotationCancel={() => {
           setRotationConfigOpen(false);

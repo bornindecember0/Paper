@@ -15,6 +15,7 @@ interface Props {
   objects: CanvasObject[];
   canvasW: number;
   canvasH: number;
+  revealRatio: number;
   onClose: () => void;
 }
 
@@ -57,6 +58,7 @@ export function FabricationPage({
   objects,
   canvasW,
   canvasH,
+  revealRatio,
   onClose,
 }: Props) {
   const [sheets, setSheets] = useState<Sheets | null>(null);
@@ -69,7 +71,13 @@ export function FabricationPage({
   useEffect(() => {
     setLoading(true);
     setError(null);
-    buildFabricationSheets(background, objects, canvasW, canvasH)
+    buildFabricationSheets(
+      background,
+      objects,
+      canvasW,
+      canvasH,
+      revealRatio,
+    )
       .then((s) => {
         setSheets(s);
         setLoading(false);
@@ -78,7 +86,7 @@ export function FabricationPage({
         setError(String(e));
         setLoading(false);
       });
-  }, [background, objects, canvasW, canvasH]);
+  }, [background, objects, canvasW, canvasH, revealRatio]);
 
   const currentUrl = sheets
     ? activeTab === "levers"
@@ -92,12 +100,6 @@ export function FabricationPage({
     levers: "Layer 1 — Levers",
     objects: "Layer 2 — Objects",
     background: "Layer 3 — Background",
-  };
-
-  const filenames: Record<typeof activeTab, string> = {
-    levers: "cut-levers.png",
-    objects: "cut-objects.png",
-    background: "cut-background.png",
   };
 
   return (

@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import type { CanvasObject, RotationMovement, TransitionMovement, SlideMovement } from '../types';
+import type { CanvasObject, TransitionMovement, SlideMovement } from '../types';
 import {
   LEVER_ROW_H,
   DEFAULT_LEVER_LENGTH,
@@ -30,6 +30,7 @@ function rotLeverGeometry(
   totalLeverH: number,
   canvasW: number,
   canvasH: number,
+  revealRatio: number,
 ): {
   pivot: { x: number; y: number };
   tip: { x: number; y: number };
@@ -38,10 +39,15 @@ function rotLeverGeometry(
   normal: { x: number; y: number };
   dims: { leverLength: number; rodWidth: number };
 } {
-  const m = obj.movement as RotationMovement;
-  const dims = getRotationDims(obj, totalLeverH, canvasW, canvasH);
+  const dims = getRotationDims(
+    obj,
+    totalLeverH,
+    canvasW,
+    canvasH,
+    revealRatio,
+  );
 
-  const totalDegRad = (m.degrees * (m.clockwise ? 1 : -1) * Math.PI) / 180;
+  const totalDegRad = Math.PI * 2;
   const angle = ROT_START_ANGLE + t * totalDegRad;
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
@@ -91,6 +97,7 @@ function transLeverGeometry(
   totalLeverH: number,
   canvasW: number,
   canvasH: number,
+  revealRatio: number,
 ): {
   pivot: { x: number; y: number };
   tip: { x: number; y: number };
@@ -100,7 +107,13 @@ function transLeverGeometry(
   dims: { leverLength: number; rodWidth: number };
 } {
   const m = obj.movement as TransitionMovement;
-  const dims = getTransitionDims(obj, totalLeverH, canvasW, canvasH );
+  const dims = getTransitionDims(
+    obj,
+    totalLeverH,
+    canvasW,
+    canvasH,
+    revealRatio,
+  );
 
   const dirX = m.endPoint.x - obj.position.x;
   const dirY = m.endPoint.y - obj.position.y;
@@ -121,8 +134,8 @@ function transLeverGeometry(
   const nx2 = ty;
   const ny2 = -tx;
 
-  const midX = (obj.position.x + m.endPoint.x) / 2 + obj.width / 2;
-  const midY = totalLeverH + (obj.position.y + m.endPoint.y) / 2 + obj.height / 2;
+  const midX = (obj.position.x + m.endPoint.x) / 2;
+  const midY = totalLeverH + (obj.position.y + m.endPoint.y) / 2;
 
   const outward = chooseOutwardNormal(
     midX,
@@ -186,10 +199,18 @@ interface Props {
   sliderValues: Record<string, number>;
   canvasW: number;
   canvasH: number;
+  revealRatio: number;
   onChange: (id: string, value: number) => void;
 }
 
-export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange }: Props) {
+export function PlayOverlay({
+  objects,
+  sliderValues,
+  canvasW,
+  canvasH,
+  revealRatio,
+  onChange,
+}: Props) {
   const rowObjs = objects.filter(o => o.movement?.type === 'slide');
   const transObjs = objects.filter(o => o.movement?.type === 'transition');
   const rotObjs = objects.filter(o => o.movement?.type === 'rotation');
@@ -197,12 +218,24 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
   const totalLeverH = 0;
 
   const transPad = transObjs.reduce((maxPad, obj) => {
-    const dims = getTransitionDims(obj, totalLeverH, canvasW, canvasH);
+    const dims = getTransitionDims(
+      obj,
+      totalLeverH,
+      canvasW,
+      canvasH,
+      revealRatio,
+    );
     return Math.max(maxPad, dims.leverLength + dims.rodWidth + 24);
   }, DEFAULT_LEVER_LENGTH + DEFAULT_LEVER_WIDTH + 24);
 
   const rotPad = rotObjs.reduce((maxPad, obj) => {
-    const dims = getRotationDims(obj, totalLeverH, canvasW, canvasH);
+    const dims = getRotationDims(
+      obj,
+      totalLeverH,
+      canvasW,
+      canvasH,
+      revealRatio,
+    );
     return Math.max(maxPad, dims.leverLength + dims.rodWidth + 24);
   }, DEFAULT_LEVER_LENGTH + DEFAULT_LEVER_WIDTH + 24);
 
@@ -249,7 +282,14 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
         {/* Rotation levers: clock-hand style, same look as translation */}
         {rotObjs.map(obj => {
           const t = sliderValues[obj.id] ?? 0;
-          const geo = rotLeverGeometry(obj, t, totalLeverH, canvasW, canvasH);
+          const geo = rotLeverGeometry(
+            obj,
+            t,
+            totalLeverH,
+            canvasW,
+            canvasH,
+            revealRatio,
+          );
           const hasVisible =
             geo.visibleFrom.x !== geo.visibleTo.x || geo.visibleFrom.y !== geo.visibleTo.y;
 
@@ -304,7 +344,14 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
         {/* Translation levers: exposed part only */}
         {transObjs.map(obj => {
           const t = sliderValues[obj.id] ?? 0;
-          const geo = transLeverGeometry(obj, t, totalLeverH, canvasW, canvasH);
+          const geo = transLeverGeometry(
+            obj,
+            t,
+            totalLeverH,
+            canvasW,
+            canvasH,
+            revealRatio,
+          );
           const hasVisible =
             geo.visibleFrom.x !== geo.visibleTo.x || geo.visibleFrom.y !== geo.visibleTo.y;
 
@@ -383,7 +430,14 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
       {/* ── Translation lever hit area: drag the exposed rod itself ─────────── */}
       {transObjs.map(obj => {
         const t = sliderValues[obj.id] ?? 0;
-        const geo = transLeverGeometry(obj, t, totalLeverH, canvasW, canvasH);
+        const geo = transLeverGeometry(
+          obj,
+          t,
+          totalLeverH,
+          canvasW,
+          canvasH,
+          revealRatio,
+        );
 
         return (
           <TransitionLeverHitArea
@@ -401,12 +455,18 @@ export function PlayOverlay({ objects, sliderValues, canvasW, canvasH, onChange 
       {/* ── Rotation lever hit area: drag the exposed rod, obj rotates ───────── */}
       {rotObjs.map(obj => {
         const t = sliderValues[obj.id] ?? 0;
-        const geo = rotLeverGeometry(obj, t, totalLeverH, canvasW, canvasH);
+        const geo = rotLeverGeometry(
+          obj,
+          t,
+          totalLeverH,
+          canvasW,
+          canvasH,
+          revealRatio,
+        );
 
         return (
           <RotationLeverHitArea
             key={obj.id}
-            obj={obj}
             t={t}
             geo={geo}
             padLeft={padLeft}
@@ -537,7 +597,6 @@ interface TransitionLeverHitAreaProps {
 // ── Rotation lever hit area ────────────────────────────────────────────────────
 
 interface RotationLeverHitAreaProps {
-  obj: CanvasObject;
   t: number;
   geo: {
     visibleFrom: { x: number; y: number };
@@ -551,15 +610,13 @@ interface RotationLeverHitAreaProps {
 }
 
 function RotationLeverHitArea({
-  obj,
   t,
   geo,
   padLeft,
   padTop,
   onChange,
 }: RotationLeverHitAreaProps) {
-  const m = obj.movement as RotationMovement;
-  const totalDegRad = (m.degrees * (m.clockwise ? 1 : -1) * Math.PI) / 180;
+  const totalDegRad = Math.PI * 2;
 
   const dx = geo.visibleTo.x - geo.visibleFrom.x;
   const dy = geo.visibleTo.y - geo.visibleFrom.y;
@@ -613,7 +670,9 @@ function RotationLeverHitArea({
       if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
 
       const newT = drag.current.startT + deltaAngle / totalDegRad;
-      onChange(Math.max(0, Math.min(1, newT)));
+      // Rotation supports both clockwise and counterclockwise dragging.
+      // Keep one full turn in each direction to avoid unbounded values.
+      onChange(Math.max(-1, Math.min(1, newT)));
     };
 
     const onUp = () => {

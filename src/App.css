@@ -411,6 +411,60 @@ body {
 }
 .btn-movement:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 
+.lever-reveal-section {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.lever-reveal-section-title {
+  font-family: var(--serif);
+  font-size: 15px;
+  font-style: italic;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+.lever-reveal-hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-mid);
+  margin: 0;
+}
+.lever-reveal-hint strong {
+  font-weight: 600;
+  color: var(--ink);
+  font-style: normal;
+}
+.lever-reveal-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lever-reveal-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.lever-reveal-label {
+  font-size: 13px;
+  color: var(--ink-mid);
+  cursor: pointer;
+}
+.lever-reveal-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.lever-reveal-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 /* Rotation inline config (no modal) */
 .rotation-config {
   margin-top: 12px;
@@ -419,6 +473,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.rotation-config-note {
+  font-size: 13px;
+  color: var(--ink-mid);
+  line-height: 1.4;
 }
 .rotation-config-row {
   display: flex;

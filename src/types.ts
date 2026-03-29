@@ -13,8 +13,6 @@ export interface TransitionMovement {
 export interface RotationMovement {
   type: 'rotation';
   anchorPoint: Position;
-  degrees: number;
-  clockwise: boolean;
 }
 
 export interface SlideMovement {

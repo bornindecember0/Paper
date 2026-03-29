@@ -16,12 +16,10 @@ interface Props {
   onMovementOpen: (type: 'translate' | 'rotation' | 'slide') => void;
   onClearMovement: () => void;
   onSave: () => void;
+  revealRatio: number;
+  onRevealRatioChange: (value: number) => void;
   // Rotation inline config (no modal)
   rotationConfigOpen: boolean;
-  rotationDegrees: number;
-  rotationClockwise: boolean;
-  onRotationDegreesChange: (v: number) => void;
-  onRotationClockwiseChange: (v: boolean) => void;
   onRotationPickAnchor: () => void;
   onRotationCancel: () => void;
   pickingAnchor: boolean;
@@ -31,7 +29,7 @@ function movementLabel(obj: CanvasObject): string {
   const m = obj.movement;
   if (!m) return '';
   if (m.type === 'transition') return `→ (${Math.round(m.endPoint.x)}, ${Math.round(m.endPoint.y)})`;
-  if (m.type === 'rotation') return `↻ ${m.degrees}° ${m.clockwise ? 'CW' : 'CCW'}`;
+  if (m.type === 'rotation') return '↻ 360° (free)';
   if (m.type === 'slide') return `⇥ ${m.direction} ${m.range > 0 ? '+' : ''}${m.range}px`;
   return '';
 }
@@ -40,8 +38,8 @@ export function RightPanel({
   tab, bgFilename, bgLocked, objects, selectedId,
   onBackgroundUpload, onDeleteBackground, onObjectUpload, onDeleteObject, onObjectSelect,
   onMovementOpen, onClearMovement, onSave,
-  rotationConfigOpen, rotationDegrees, rotationClockwise,
-  onRotationDegreesChange, onRotationClockwiseChange,
+  revealRatio, onRevealRatioChange,
+  rotationConfigOpen,
   onRotationPickAnchor, onRotationCancel,
   pickingAnchor,
 }: Props) {
@@ -185,33 +183,13 @@ export function RightPanel({
           >Slide</button>
         </div>
 
+       
+
         {/* Rotation inline config — no modal, canvas stays visible */}
         {rotationConfigOpen && selectedObject && (
           <div className="rotation-config">
-            <div className="rotation-config-row">
-              <span className="rotation-config-label">Direction</span>
-              <div className="dir-btns">
-                <button
-                  className={`dir-btn ${!rotationClockwise ? 'active' : ''}`}
-                  onClick={() => onRotationClockwiseChange(false)}
-                >CCW</button>
-                <button
-                  className={`dir-btn ${rotationClockwise ? 'active' : ''}`}
-                  onClick={() => onRotationClockwiseChange(true)}
-                >CW</button>
-              </div>
-            </div>
-            <div className="rotation-config-row">
-              <span className="rotation-config-label">Angle</span>
-              <input
-                type="number"
-                className="number-input"
-                min={1}
-                max={360}
-                value={rotationDegrees}
-                onChange={e => onRotationDegreesChange(Number(e.target.value))}
-              />
-              <span className="rotation-config-unit">°</span>
+            <div className="rotation-config-note">
+              Rotation is fixed at 360°. Click inside the selected object to set the rotation anchor.
             </div>
             <div className="rotation-config-actions">
               <button
@@ -219,13 +197,40 @@ export function RightPanel({
                 onClick={onRotationPickAnchor}
                 disabled={pickingAnchor}
               >
-                {pickingAnchor ? 'Click inside object…' : (selectedObject.movement?.type === 'rotation' ? 'Change anchor' : 'Pick anchor')}
+                {pickingAnchor ? 'Click inside selected object…' : (selectedObject.movement?.type === 'rotation' ? 'Change anchor' : 'Pick anchor')}
               </button>
               <button className="btn btn-secondary" onClick={onRotationCancel}>Cancel</button>
             </div>
           </div>
         )}
       </div>
+      <div className="lever-reveal-section">
+          <div className="lever-reveal-section-title">Lever length</div>
+          <p className="lever-reveal-hint" id="lever-reveal-hint">
+            Adjust how far the lever arm extends out of the canvas.
+          </p>
+          <div className="lever-reveal-control">
+            <div className="lever-reveal-label-row">
+              {/* <label className="lever-reveal-label" htmlFor="lever-reveal-slider">
+                How much sticks out
+              </label> */}
+              <span className="lever-reveal-value" aria-live="polite">
+                {Math.round(revealRatio * 100)}%
+              </span>
+            </div>
+            <input
+              id="lever-reveal-slider"
+              className="lever-reveal-slider"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(revealRatio * 100)}
+              onChange={(e) => onRevealRatioChange(Number(e.target.value) / 100)}
+              aria-describedby="lever-reveal-hint"
+            />
+          </div>
+        </div>
 
       {/* Save section */}
       <div className="panel-section panel-section-save">
