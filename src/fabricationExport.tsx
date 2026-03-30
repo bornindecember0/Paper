@@ -1,31 +1,41 @@
 /**
  * fabricationExport.ts
  *
- * Three cut-ready PNG layers:
+ * Three cut-ready layers, each rendered onto an A4 page (150 DPI = 1240×1754 px)
+ * with the 800×600 canvas area centred on the page.
+ *
+ * Canvas area origin on the page:
+ *   CANVAS_OFFSET_X = (1240 - 800) / 2 = 220 px
+ *   CANVAS_OFFSET_Y = (1754 - 600) / 2 = 577 px
+ *
+ * All three sheets share the same canvas position so that printed PDFs stack
+ * and register correctly using the corner marks.
  *
  *   1. LEVERS
  *      • Translation / rotation: full rod from pivot to tip
- *      • Slide: full strip+tab rectangle at its t=0 resting position —
- *        length = 2 image cells + tab + grip margin, width = object width/height
+ *      • Slide: full strip+tab rectangle at its t=0 resting position
  *
  *   2. OBJECTS
  *      • Every non-slide object: alpha-traced silhouette (or bounding rect)
- *      • Every slide object: the two composited cells (bg + object image) with
- *        cut borders, appended below the canvas region
+ *      • Every slide object: two composited cells (bg + object image) drawn
+ *        at the strip's t=0 physical position (may extend outside canvas area)
  *
  *   3. BACKGROUND
  *      • Background image with translation centerline, slide window cut-out,
  *        rotation anchor hole, and outer border
  */
 
-import type { CanvasObject, SlideMovement, TransitionMovement } from "./types";
+import type {
+  CanvasObject,
+  SlideMovement,
+  TransitionMovement,
+} from "./types";
 import {
   getTransitionDims,
   getRotationDims,
   getRotationAnchor,
   getPathDir,
   chooseOutwardNormal,
-  FABRICATION_LEVER_SHEET_PAD,
 } from "./leverGeometry";
 
 // ─── constants ────────────────────────────────────────────────────────────────
@@ -38,90 +48,19 @@ const ALPHA_THRESH = 30;
 /** Extra length beyond the strip that sticks out so you can grip the tab. */
 const GRIP_EXTRA = 40;
 
-// ─── print dimensions (300 DPI, 8.5 × 11 inch) ───────────────────────────────
-const PRINT_DPI = 300;
-/** Landscape: 11" wide × 8.5" tall */
-const PRINT_LANDSCAPE_W = Math.round(11 * PRINT_DPI); // 3300 px
-const PRINT_LANDSCAPE_H = Math.round(8.5 * PRINT_DPI); // 2550 px
-/** Portrait: 8.5" wide × 11" tall */
-const PRINT_PORTRAIT_W = Math.round(8.5 * PRINT_DPI); // 2550 px
-const PRINT_PORTRAIT_H = Math.round(11 * PRINT_DPI); // 3300 px
+/** A4 landscape @ 150 DPI (297mm × 210mm) */
+const A4_W_PX = 1754;
+const A4_H_PX = 1240;
 
-/**
- * Inject a pHYs chunk into a PNG data-URL so printers know to render it at
- * exactly PRINT_DPI.  The pHYs chunk must come after the IHDR chunk.
- *
- * PNG binary layout:
- *   8-byte signature | IHDR chunk (4+4+13+4 = 25 bytes) | …other chunks…
- * We insert pHYs immediately after IHDR (byte offset 33).
- */
-function injectDpi(dataUrl: string): string {
-  // Decode base64 payload
-  const b64 = dataUrl.split(",")[1];
-  const bin = atob(b64);
-  const src = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) src[i] = bin.charCodeAt(i);
-
-  // Build the pHYs chunk (9 data bytes: 4 ppuX + 4 ppuY + 1 unit)
-  const PIXELS_PER_METER = Math.round(PRINT_DPI / 0.0254); // ~11811
-  const pHYsData = new Uint8Array(9);
-  const view = new DataView(pHYsData.buffer);
-  view.setUint32(0, PIXELS_PER_METER); // pixels per unit X
-  view.setUint32(4, PIXELS_PER_METER); // pixels per unit Y
-  pHYsData[8] = 1; // unit = metre
-
-  // CRC32 over chunk type + data
-  const chunkType = new TextEncoder().encode("pHYs");
-  const crcInput = new Uint8Array(4 + 9);
-  crcInput.set(chunkType, 0);
-  crcInput.set(pHYsData, 4);
-  const crc = crc32(crcInput);
-
-  // Assemble the 4+4+9+4 = 21-byte chunk
-  const chunk = new Uint8Array(21);
-  const cv = new DataView(chunk.buffer);
-  cv.setUint32(0, 9); // data length
-  chunk.set(chunkType, 4); // "pHYs"
-  chunk.set(pHYsData, 8); // data
-  cv.setUint32(17, crc >>> 0); // CRC
-
-  // Insert after IHDR (signature=8 bytes, IHDR chunk=4+4+13+4=25 bytes → offset 33)
-  const INSERT_AT = 33;
-  const dst = new Uint8Array(src.length + chunk.length);
-  dst.set(src.subarray(0, INSERT_AT), 0);
-  dst.set(chunk, INSERT_AT);
-  dst.set(src.subarray(INSERT_AT), INSERT_AT + chunk.length);
-
-  // Re-encode to base64 data URL
-  let out = "";
-  dst.forEach((b) => (out += String.fromCharCode(b)));
-  return "data:image/png;base64," + btoa(out);
-}
-
-/** Standard CRC32 used by PNG. */
-function crc32(buf: Uint8Array): number {
-  const table = crc32Table();
-  let crc = 0xffffffff;
-  for (const b of buf) crc = (crc >>> 8) ^ table[(crc ^ b) & 0xff];
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-let _crcTable: Uint32Array | null = null;
-function crc32Table(): Uint32Array {
-  if (_crcTable) return _crcTable;
-  _crcTable = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    _crcTable[n] = c;
-  }
-  return _crcTable;
-}
+/** Top-left corner of the canvas area on the A4 page (pixels). */
+const CANVAS_OFFSET_X = (A4_W_PX - 800) / 2; // 477
+const CANVAS_OFFSET_Y = (A4_H_PX - 600) / 2; // 320
 
 export interface FabricationSheets {
   leversDataUrl: string;
   objectsDataUrl: string;
   backgroundDataUrl: string;
+  printDataUrl: string;
 }
 
 // ─── image loading ────────────────────────────────────────────────────────────
@@ -146,12 +85,22 @@ function loadImageToCanvas(url: string): Promise<{
 
 // ─── drawing helpers ──────────────────────────────────────────────────────────
 
-function drawRegMarks(ctx: CanvasRenderingContext2D, w: number, h: number) {
+/**
+ * Draw ⊕ registration marks at the four corners of the canvas area.
+ * ox/oy are the page-space top-left of the canvas area.
+ */
+function drawRegMarks(
+  ctx: CanvasRenderingContext2D,
+  ox: number,
+  oy: number,
+  w: number,
+  h: number,
+) {
   const pts = [
-    [REG_RADIUS + 4, REG_RADIUS + 4],
-    [w - REG_RADIUS - 4, REG_RADIUS + 4],
-    [REG_RADIUS + 4, h - REG_RADIUS - 4],
-    [w - REG_RADIUS - 4, h - REG_RADIUS - 4],
+    [ox + REG_RADIUS + 4, oy + REG_RADIUS + 4],
+    [ox + w - REG_RADIUS - 4, oy + REG_RADIUS + 4],
+    [ox + REG_RADIUS + 4, oy + h - REG_RADIUS - 4],
+    [ox + w - REG_RADIUS - 4, oy + h - REG_RADIUS - 4],
   ];
   ctx.save();
   ctx.strokeStyle = CUT_COLOR;
@@ -218,7 +167,7 @@ function drawFullRod(
 //
 // At t=0 the strip is fully retracted: only the tab sits just outside the
 // canvas edge.  So we position the strip rectangle so the tab end is at the
-// canvas boundary (plus pad offset on the levers sheet).
+// canvas boundary.
 
 interface SlideStripGeo {
   /** Top-left corner of the full strip rect in canvas coordinates. */
@@ -241,21 +190,11 @@ function slideStripGeo(
   const imgW = obj.width,
     imgH = obj.height;
 
-  // Total strip length (two cells + tab + grip) along the movement axis
   const stripLen = (isV ? imgH : imgW) * 2 + TAB_THICK + GRIP_EXTRA;
-
-  // Width perpendicular to movement
   const stripCross = isV ? imgW : imgH;
 
-  // Window top-left in canvas coords
   const winX = obj.position.x - imgW / 2;
   const winY = obj.position.y - imgH / 2;
-
-  // At t=0 the strip is fully retracted so the tab just clears the canvas edge.
-  // The "pull direction" is where the tab starts, so the strip extends inward
-  // from there by stripLen.
-  //
-  // We want: rect x/y in canvas-space (levers sheet will apply a pad offset).
 
   let rx = 0,
     ry = 0,
@@ -263,24 +202,21 @@ function slideStripGeo(
     rh = 0;
 
   if (isV) {
-    rw = stripCross; // = imgW
+    rw = stripCross;
     rh = stripLen;
-    rx = winX; // horizontally aligned with window
+    rx = winX;
     if (m.pullDirection === "down") {
-      // tab at bottom (starts below canvas at y=canvasH), strip extends upward
       ry = canvasH - stripLen + TAB_THICK + GRIP_EXTRA;
     } else {
-      // pull=up: tab at top (starts above canvas at y= -TAB_THICK), strip extends downward
       ry = -(TAB_THICK + GRIP_EXTRA);
     }
   } else {
     rw = stripLen;
-    rh = stripCross; // = imgH
+    rh = stripCross;
     ry = winY;
     if (m.pullDirection === "right") {
       rx = canvasW - stripLen + TAB_THICK + GRIP_EXTRA;
     } else {
-      // pull=left
       rx = -(TAB_THICK + GRIP_EXTRA);
     }
   }
@@ -326,6 +262,36 @@ function transLeverGeoAt(
   return { pivot, tip, dims };
 }
 
+/**
+ * Find the angle (radians) from canvas-local (anchorX, anchorY) that maximises
+ * the available distance to the A4 page boundary, so the lever rod fits entirely
+ * on the printed page regardless of the object's position.
+ */
+function bestRotationDrawAngle(anchorX: number, anchorY: number): number {
+  // A4 landscape page boundary expressed in canvas-local coords
+  // (i.e. after ctx.translate(CANVAS_OFFSET_X, CANVAS_OFFSET_Y))
+  const pageLeft   = -CANVAS_OFFSET_X;
+  const pageRight  =  A4_W_PX - CANVAS_OFFSET_X;
+  const pageTop    = -CANVAS_OFFSET_Y;
+  const pageBottom =  A4_H_PX - CANVAS_OFFSET_Y;
+
+  let bestAngle = ROT_START;
+  let bestDist  = -Infinity;
+
+  for (let i = 0; i < 360; i++) {
+    const angle = (i / 360) * Math.PI * 2;
+    const nx = Math.cos(angle);
+    const ny = Math.sin(angle);
+    let dist = Infinity;
+    if (nx >  1e-9) dist = Math.min(dist, (pageRight  - anchorX) /  nx);
+    if (nx < -1e-9) dist = Math.min(dist, (anchorX - pageLeft)   / -nx);
+    if (ny >  1e-9) dist = Math.min(dist, (pageBottom - anchorY) /  ny);
+    if (ny < -1e-9) dist = Math.min(dist, (anchorY - pageTop)    / -ny);
+    if (dist > bestDist) { bestDist = dist; bestAngle = angle; }
+  }
+  return bestAngle;
+}
+
 function rotLeverGeoAt(
   obj: CanvasObject,
   t: number,
@@ -333,10 +299,18 @@ function rotLeverGeoAt(
   canvasW: number,
   canvasH: number,
   revealRatio: number,
+  drawAngle?: number,
 ) {
-  const dims = getRotationDims(obj, totalLeverH, canvasW, canvasH, revealRatio);
+  const dims = getRotationDims(
+    obj,
+    totalLeverH,
+    canvasW,
+    canvasH,
+    revealRatio,
+    drawAngle,      // sheetCap is now computed for the actual drawing direction
+  );
   const totalDegRad = Math.PI * 2;
-  const angle = ROT_START + t * totalDegRad;
+  const angle = drawAngle !== undefined ? drawAngle : ROT_START + t * totalDegRad;
   const dx = Math.cos(angle),
     dy = Math.sin(angle);
   const anchor = getRotationAnchor(obj);
@@ -445,37 +419,39 @@ function getAlphaPolygons(off: HTMLCanvasElement): Pt[][] {
     .filter((p) => p.length >= 3);
 }
 
-// ─── print scaling helper ─────────────────────────────────────────────────────
+// ─── A4 canvas factory ────────────────────────────────────────────────────────
 
-/**
- * Scale any canvas to landscape 8.5×11" at 300 DPI, centered on a white page,
- * then inject pHYs metadata so printers output at the correct physical size.
- */
-function scaleToPrintLandscape(src: HTMLCanvasElement): string {
-  const fitScale = Math.min(
-    PRINT_LANDSCAPE_W / src.width,
-    PRINT_LANDSCAPE_H / src.height,
-  );
-  const drawW = Math.round(src.width * fitScale);
-  const drawH = Math.round(src.height * fitScale);
-  const offX = Math.round((PRINT_LANDSCAPE_W - drawW) / 2);
-  const offY = Math.round((PRINT_LANDSCAPE_H - drawH) / 2);
+function makeA4Canvas(): {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+} {
+  const canvas = document.createElement("canvas");
+  canvas.width = A4_W_PX;
+  canvas.height = A4_H_PX;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, A4_W_PX, A4_H_PX);
+  return { canvas, ctx };
+}
 
-  const print = document.createElement("canvas");
-  print.width = PRINT_LANDSCAPE_W;
-  print.height = PRINT_LANDSCAPE_H;
-  const pctx = print.getContext("2d")!;
-  pctx.fillStyle = "#ffffff";
-  pctx.fillRect(0, 0, PRINT_LANDSCAPE_W, PRINT_LANDSCAPE_H);
-  pctx.drawImage(src, offX, offY, drawW, drawH);
-
-  return injectDpi(print.toDataURL("image/png"));
+/** Draw dashed canvas-area boundary (page space). */
+function drawCanvasBoundary(
+  ctx: CanvasRenderingContext2D,
+  ox: number,
+  oy: number,
+  w: number,
+  h: number,
+) {
+  ctx.save();
+  ctx.strokeStyle = "#aaaaaa";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(ox, oy, w, h);
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 // ─── Sheet 1: LEVERS ─────────────────────────────────────────────────────────
-//
-// Translation / rotation: full rod pivot→tip.
-// Slide: full strip+tab rectangle at t=0 resting position.
 
 function renderLeversSheet(
   objects: CanvasObject[],
@@ -483,77 +459,60 @@ function renderLeversSheet(
   canvasH: number,
   revealRatio: number,
 ): string {
-  const pad = FABRICATION_LEVER_SHEET_PAD;
-  const srcW = canvasW + pad * 2;
-  const srcH = canvasH + pad * 2;
-  const totalLeverH = 0;
+  const { canvas, ctx } = makeA4Canvas();
+  const ox = CANVAS_OFFSET_X;
+  const oy = CANVAS_OFFSET_Y;
 
-  // Draw everything at source (screen) resolution first, then scale to print.
-  const src = document.createElement("canvas");
-  src.width = srcW;
-  src.height = srcH;
-  const ctx = src.getContext("2d")!;
+  drawCanvasBoundary(ctx, ox, oy, canvasW, canvasH);
 
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, srcW, srcH);
-
-  // Dashed canvas boundary
+  // All drawing below is in canvas-local coordinates via translate
   ctx.save();
-  ctx.strokeStyle = "#aaaaaa";
-  ctx.lineWidth = 1;
-  ctx.setLineDash([6, 4]);
-  ctx.strokeRect(pad, pad, canvasW, canvasH);
-  ctx.setLineDash([]);
-  ctx.restore();
-
-  ctx.save();
-  ctx.translate(pad, pad); // origin = canvas top-left
+  ctx.translate(ox, oy);
   ctx.strokeStyle = CUT_COLOR;
   ctx.lineWidth = CUT_STROKE;
 
+  let leverIdx = 0;
+  const labelFont = "11px sans-serif";
+
   objects.forEach((obj) => {
     if (!obj.movement) return;
+    leverIdx++;
+    const tag = `#${leverIdx} ${obj.movement.type}`;
 
     if (obj.movement.type === "transition") {
-      const geo = transLeverGeoAt(
-        obj,
-        0,
-        totalLeverH,
-        canvasW,
-        canvasH,
-        revealRatio,
-      );
+      const geo = transLeverGeoAt(obj, 0, 0, canvasW, canvasH, revealRatio);
       drawFullRod(ctx, geo.pivot, geo.tip, geo.dims.rodWidth);
-      //punchHole(ctx, geo.pivot.x, geo.pivot.y, geo.dims.rodWidth * 0.3);
+      ctx.save();
+      ctx.fillStyle = "#555";
+      ctx.font = labelFont;
+      ctx.fillText(tag, geo.pivot.x + 4, geo.pivot.y - geo.dims.rodWidth / 2 - 3);
+      ctx.restore();
     }
 
     if (obj.movement.type === "rotation") {
-      const geo = rotLeverGeoAt(
-        obj,
-        0,
-        totalLeverH,
-        canvasW,
-        canvasH,
-        revealRatio,
-      );
+      const anchor = getRotationAnchor(obj);
+      const drawAngle = bestRotationDrawAngle(anchor.x, anchor.y);
+      const geo = rotLeverGeoAt(obj, 0, 0, canvasW, canvasH, revealRatio, drawAngle);
       drawFullRod(ctx, geo.pivot, geo.tip, geo.dims.rodWidth);
       punchHole(ctx, geo.pivot.x, geo.pivot.y, geo.dims.rodWidth * 0.3);
+      ctx.save();
+      ctx.fillStyle = "#555";
+      ctx.font = labelFont;
+      ctx.fillText(tag, geo.pivot.x + 4, geo.pivot.y - geo.dims.rodWidth / 2 - 3);
+      ctx.restore();
     }
 
     if (obj.movement.type === "slide") {
-      // Full strip rectangle — the physical piece to cut including both cells + tab + grip
       const geo = slideStripGeo(obj, canvasW, canvasH);
       ctx.strokeRect(geo.x, geo.y, geo.w, geo.h);
-
-      // Dashed line showing where the two image cells join (fold line reference)
-      const m = obj.movement as SlideMovement;
-      const isV = m.direction === "vertical";
       ctx.save();
+      ctx.fillStyle = "#555";
+      ctx.font = labelFont;
+      ctx.fillText(tag, geo.x + 4, geo.y - 4);
       ctx.strokeStyle = "#888888";
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 3]);
-      if (isV) {
-        // horizontal divider at the midpoint of the strip (where cells meet)
+      if (geo.isVertical) {
         const midY = geo.y + obj.height;
         ctx.beginPath();
         ctx.moveTo(geo.x, midY);
@@ -574,42 +533,18 @@ function renderLeversSheet(
   ctx.restore();
 
   ctx.fillStyle = "#333";
-  ctx.font = "bold 16px sans-serif";
-  ctx.fillText("LAYER 1 — LEVERS  (cut solid lines only)", 18, 22);
-  drawRegMarks(ctx, srcW, srcH);
+  ctx.font = "bold 15px sans-serif";
+  ctx.fillText("LAYER 1 — LEVERS  (cut solid lines only)", ox + 10, oy - 10);
+  drawRegMarks(ctx, ox, oy, canvasW, canvasH);
 
-  // ── Scale to print dimensions ─────────────────────────────────────────────
-  // If the source aspect ratio is taller than landscape, use portrait instead.
-  const srcAspect = srcW / srcH;
-  const landscapeAspect = PRINT_LANDSCAPE_W / PRINT_LANDSCAPE_H;
-  const printW =
-    srcAspect >= landscapeAspect ? PRINT_LANDSCAPE_W : PRINT_PORTRAIT_W;
-  const printH =
-    srcAspect >= landscapeAspect ? PRINT_LANDSCAPE_H : PRINT_PORTRAIT_H;
-
-  // Fit the source content inside the print page with uniform margins.
-  const fitScale = Math.min(printW / srcW, printH / srcH);
-  const drawW = Math.round(srcW * fitScale);
-  const drawH = Math.round(srcH * fitScale);
-  const offX = Math.round((printW - drawW) / 2);
-  const offY = Math.round((printH - drawH) / 2);
-
-  const print = document.createElement("canvas");
-  print.width = printW;
-  print.height = printH;
-  const pctx = print.getContext("2d")!;
-  pctx.fillStyle = "#ffffff";
-  pctx.fillRect(0, 0, printW, printH);
-  pctx.drawImage(src, offX, offY, drawW, drawH);
-
-  return injectDpi(print.toDataURL("image/png"));
+  return canvas.toDataURL("image/png");
 }
 
 // ─── Sheet 2: OBJECTS ────────────────────────────────────────────────────────
 //
 // Non-slide objects: alpha-traced silhouette at their canvas position.
-// Slide objects: two composited cells (bg region + object image) appended
-//               below the canvas region with cut borders.
+// Slide objects: two composited cells (bg region + object image) drawn at the
+//               strip's t=0 physical position (may extend outside canvas area).
 
 async function renderObjectsSheet(
   background: string | null,
@@ -617,7 +552,6 @@ async function renderObjectsSheet(
   canvasW: number,
   canvasH: number,
 ): Promise<string> {
-  // Load all images
   const allUrls = [
     ...(background ? [background] : []),
     ...objects.map((o) => o.imageUrl),
@@ -637,18 +571,17 @@ async function renderObjectsSheet(
   const bgEntry = background ? (imgMap.get(background) ?? null) : null;
   const bgImg = bgEntry?.img ?? null;
 
-  // ── Main canvas area (non-slide objects) ────────────────────────────────
-  const canvas = document.createElement("canvas");
-  canvas.width = canvasW;
-  canvas.height = canvasH;
-  const ctx = canvas.getContext("2d")!;
+  const { canvas, ctx } = makeA4Canvas();
+  const ox = CANVAS_OFFSET_X;
+  const oy = CANVAS_OFFSET_Y;
 
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvasW, canvasH);
+  // All canvas-local drawing via translate
+  ctx.save();
+  ctx.translate(ox, oy);
 
+  // ── Non-slide objects ────────────────────────────────────────────────────
   for (const obj of objects) {
-    if (obj.movement?.type === "slide") continue; // handled below
-    // Skip "after" objects of slide pairs (they appear in the strip)
+    if (obj.movement?.type === "slide") continue;
     const isAfterObj = objects.some(
       (o) =>
         o.movement?.type === "slide" &&
@@ -660,16 +593,13 @@ async function renderObjectsSheet(
     if (!res) continue;
 
     const { img, off } = res;
-    const ox = obj.position.x - obj.width / 2;
-    const oy = obj.position.y - obj.height / 2;
+    const imgOx = obj.position.x - obj.width / 2;
+    const imgOy = obj.position.y - obj.height / 2;
     const scaleX = obj.width / img.naturalWidth;
     const scaleY = obj.height / img.naturalHeight;
 
-    // Draw the source art at full opacity so the cut outline is visible
-    // without the previous semi-transparent "shadow" effect.
-    ctx.drawImage(img, ox, oy, obj.width, obj.height);
+    ctx.drawImage(img, imgOx, imgOy, obj.width, obj.height);
 
-    // Silhouette outline
     const polys = getAlphaPolygons(off);
     ctx.save();
     ctx.strokeStyle = CUT_COLOR;
@@ -677,15 +607,15 @@ async function renderObjectsSheet(
     if (polys.length > 0) {
       for (const poly of polys) {
         ctx.beginPath();
-        ctx.moveTo(ox + poly[0].x * scaleX, oy + poly[0].y * scaleY);
+        ctx.moveTo(imgOx + poly[0].x * scaleX, imgOy + poly[0].y * scaleY);
         for (let j = 1; j < poly.length; j++) {
-          ctx.lineTo(ox + poly[j].x * scaleX, oy + poly[j].y * scaleY);
+          ctx.lineTo(imgOx + poly[j].x * scaleX, imgOy + poly[j].y * scaleY);
         }
         ctx.closePath();
         ctx.stroke();
       }
     } else {
-      ctx.strokeRect(ox, oy, obj.width, obj.height);
+      ctx.strokeRect(imgOx, imgOy, obj.width, obj.height);
     }
     ctx.restore();
 
@@ -695,40 +625,8 @@ async function renderObjectsSheet(
     }
   }
 
-  // Dashed canvas boundary
-  ctx.save();
-  ctx.strokeStyle = "#aaaaaa";
-  ctx.lineWidth = 1;
-  ctx.setLineDash([6, 4]);
-  ctx.strokeRect(1, 1, canvasW - 2, canvasH - 2);
-  ctx.setLineDash([]);
-  ctx.restore();
-
-  ctx.fillStyle = "#333";
-  ctx.font = "bold 16px sans-serif";
-  ctx.fillText("LAYER 2 — OBJECTS  (cut solid lines only)", 10, 20);
-  drawRegMarks(ctx, canvasW, canvasH);
-
-  // ── Slide strips appended below ─────────────────────────────────────────
+  // ── Slide strips at t=0 physical position ───────────────────────────────
   const slideObjs = objects.filter((o) => o.movement?.type === "slide");
-  if (slideObjs.length === 0) return scaleToPrintLandscape(canvas);
-
-  const LABEL_H = 28,
-    GAP = 16;
-  let extraH = GAP;
-  for (const obj of slideObjs) {
-    const m = obj.movement as SlideMovement;
-    const isV = m.direction === "vertical";
-    extraH += LABEL_H + (isV ? obj.height * 2 : obj.height) + GAP;
-  }
-
-  const combined = document.createElement("canvas");
-  combined.width = canvasW;
-  combined.height = canvasH + extraH;
-  const cctx = combined.getContext("2d")!;
-  cctx.drawImage(canvas, 0, 0);
-
-  let yOff = canvasH + GAP;
 
   for (const obj of slideObjs) {
     const m = obj.movement as SlideMovement;
@@ -737,49 +635,37 @@ async function renderObjectsSheet(
       imgH = obj.height;
     const winX = obj.position.x - imgW / 2;
     const winY = obj.position.y - imgH / 2;
+
     const afterObj = objects.find((o) => o.id === m.secondObjectId);
     const beforeImg = imgMap.get(obj.imageUrl)?.img ?? null;
     const afterImg = afterObj
       ? (imgMap.get(afterObj.imageUrl)?.img ?? null)
       : null;
 
-    // Label
-    cctx.fillStyle = "#333";
-    cctx.font = "bold 13px sans-serif";
-    cctx.fillText(
-      `Slide strip — ${isV ? "vertical" : "horizontal"}  |  before (top/left) · after (bottom/right)`,
-      8,
-      yOff + 16,
-    );
-    yOff += LABEL_H;
+    const geo = slideStripGeo(obj, canvasW, canvasH);
 
-    // Two cells: before on the side that ends in the window, after on the far side
-    // Match CanvasArea play-mode ordering:
-    //   pull=down or pull=right → [after, before] (after is pulled in first)
-    //   pull=up   or pull=left  → [after, before] same ordering
-    // Both cells are imgW × imgH.
+    // [after, before] ordering matches CanvasArea play-mode
     type Cell = { imgEl: HTMLImageElement | null; cx: number; cy: number };
     const cells: Cell[] = isV
       ? [
-          { imgEl: afterImg, cx: 0, cy: yOff },
-          { imgEl: beforeImg, cx: 0, cy: yOff + imgH },
+          { imgEl: afterImg, cx: geo.x, cy: geo.y },
+          { imgEl: beforeImg, cx: geo.x, cy: geo.y + imgH },
         ]
       : [
-          { imgEl: afterImg, cx: 0, cy: yOff },
-          { imgEl: beforeImg, cx: imgW, cy: yOff },
+          { imgEl: afterImg, cx: geo.x, cy: geo.y },
+          { imgEl: beforeImg, cx: geo.x + imgW, cy: geo.y },
         ];
 
     for (const cell of cells) {
-      cctx.save();
-      cctx.beginPath();
-      cctx.rect(cell.cx, cell.cy, imgW, imgH);
-      cctx.clip();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(cell.cx, cell.cy, imgW, imgH);
+      ctx.clip();
 
-      // Background region (same slice that sits behind the window)
       if (bgImg) {
         const scaleX = bgImg.naturalWidth / canvasW;
         const scaleY = bgImg.naturalHeight / canvasH;
-        cctx.drawImage(
+        ctx.drawImage(
           bgImg,
           winX * scaleX,
           winY * scaleY,
@@ -791,38 +677,72 @@ async function renderObjectsSheet(
           imgH,
         );
       } else {
-        cctx.fillStyle = "#ffffff";
-        cctx.fillRect(cell.cx, cell.cy, imgW, imgH);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(cell.cx, cell.cy, imgW, imgH);
       }
 
-      // Object image on top
       if (cell.imgEl) {
-        cctx.drawImage(cell.imgEl, cell.cx, cell.cy, imgW, imgH);
+        ctx.drawImage(cell.imgEl, cell.cx, cell.cy, imgW, imgH);
       }
+      ctx.restore();
 
-      cctx.restore();
-
-      // Cut border
-      cctx.save();
-      cctx.strokeStyle = CUT_COLOR;
-      cctx.lineWidth = CUT_STROKE;
-      cctx.strokeRect(cell.cx, cell.cy, imgW, imgH);
-      cctx.restore();
+      // Cell cut border
+      ctx.save();
+      ctx.strokeStyle = CUT_COLOR;
+      ctx.lineWidth = CUT_STROKE;
+      ctx.strokeRect(cell.cx, cell.cy, imgW, imgH);
+      ctx.restore();
     }
 
-    yOff += isV ? imgH * 2 + GAP : imgH + GAP;
+    // Overall strip cut border (includes tab area)
+    ctx.save();
+    ctx.strokeStyle = CUT_COLOR;
+    ctx.lineWidth = CUT_STROKE;
+    ctx.strokeRect(geo.x, geo.y, geo.w, geo.h);
+    ctx.restore();
+
+    // Dashed fold line at cell join
+    ctx.save();
+    ctx.strokeStyle = "#888888";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    if (isV) {
+      const midY = geo.y + imgH;
+      ctx.beginPath();
+      ctx.moveTo(geo.x, midY);
+      ctx.lineTo(geo.x + geo.w, midY);
+      ctx.stroke();
+    } else {
+      const midX = geo.x + imgW;
+      ctx.beginPath();
+      ctx.moveTo(midX, geo.y);
+      ctx.lineTo(midX, geo.y + geo.h);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
   }
 
-  return scaleToPrintLandscape(combined);
+  // Dashed canvas boundary
+  ctx.save();
+  ctx.strokeStyle = "#aaaaaa";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(1, 1, canvasW - 2, canvasH - 2);
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  ctx.restore(); // undo translate
+
+  ctx.fillStyle = "#333";
+  ctx.font = "bold 15px sans-serif";
+  ctx.fillText("LAYER 2 — OBJECTS  (cut solid lines only)", ox + 10, oy - 10);
+  drawRegMarks(ctx, ox, oy, canvasW, canvasH);
+
+  return canvas.toDataURL("image/png");
 }
 
 // ─── Sheet 3: BACKGROUND ─────────────────────────────────────────────────────
-//
-// Background image with:
-//   • Translation centerline (thin line from start to end)
-//   • Slide window cut-out (rectangle where the strip peeks through)
-//   • Rotation anchor hole
-//   • Outer border cut
 
 async function renderBackgroundSheet(
   background: string | null,
@@ -835,10 +755,12 @@ async function renderBackgroundSheet(
     : null;
   const bgImg = bgEntry?.img ?? null;
 
-  const canvas = document.createElement("canvas");
-  canvas.width = canvasW;
-  canvas.height = canvasH;
-  const ctx = canvas.getContext("2d")!;
+  const { canvas, ctx } = makeA4Canvas();
+  const ox = CANVAS_OFFSET_X;
+  const oy = CANVAS_OFFSET_Y;
+
+  ctx.save();
+  ctx.translate(ox, oy);
 
   if (bgImg) {
     ctx.drawImage(bgImg, 0, 0, canvasW, canvasH);
@@ -880,18 +802,169 @@ async function renderBackgroundSheet(
     }
   });
 
+  // Canvas outer border
   ctx.save();
   ctx.strokeStyle = CUT_COLOR;
   ctx.lineWidth = CUT_STROKE;
   ctx.strokeRect(1, 1, canvasW - 2, canvasH - 2);
   ctx.restore();
 
-  ctx.fillStyle = "#333";
-  ctx.font = "bold 16px sans-serif";
-  ctx.fillText("LAYER 3 — BACKGROUND  (cut solid lines only)", 10, 20);
-  drawRegMarks(ctx, canvasW, canvasH);
+  ctx.restore(); // undo translate
 
-  return scaleToPrintLandscape(canvas);
+  ctx.fillStyle = "#333";
+  ctx.font = "bold 15px sans-serif";
+  ctx.fillText("LAYER 3 — BACKGROUND  (cut solid lines only)", ox + 10, oy - 10);
+  drawRegMarks(ctx, ox, oy, canvasW, canvasH);
+
+  return canvas.toDataURL("image/png");
+}
+
+// ─── Sheet 4: LEVER PRINT SHEET ──────────────────────────────────────────────
+//
+// All lever pieces (rods + slide strips) laid out side-by-side in rows so they
+// never overlap and are easy to cut independently.
+//
+// • Transition / rotation rods  → normalised to horizontal (w = leverLength,
+//   h = rodWidth). Rotation rods get a pivot hole at the left end.
+// • Slide strips                → normalised so the longer dimension is
+//   horizontal. The dashed fold line marks the cell boundary.
+//
+// Pieces are packed left→right in rows; a new row starts when a piece would
+// overflow the right margin.
+
+function renderLeverPrintSheet(
+  objects: CanvasObject[],
+  canvasW: number,
+  canvasH: number,
+  revealRatio: number,
+): string {
+  const { canvas, ctx } = makeA4Canvas();
+
+  const MARGIN = 50;
+  const GAP = 28;
+  const LABEL_H = 18;
+
+  interface LayoutPiece {
+    w: number;
+    h: number;
+    draw: (lx: number, ly: number) => void;
+  }
+
+  const pieces: LayoutPiece[] = [];
+  let idx = 0;
+
+  for (const obj of objects) {
+    if (!obj.movement) continue;
+    idx++;
+    const label = `#${idx} ${obj.movement.type}`;
+
+    // ── Transition rod ───────────────────────────────────────────────────
+    if (obj.movement.type === "transition") {
+      const geo = transLeverGeoAt(obj, 0, 0, canvasW, canvasH, revealRatio);
+      const pw = Math.ceil(geo.dims.leverLength);
+      const ph = Math.ceil(geo.dims.rodWidth);
+      pieces.push({
+        w: pw,
+        h: ph + LABEL_H,
+        draw(lx, ly) {
+          ctx.fillStyle = "#555";
+          ctx.font = "11px sans-serif";
+          ctx.fillText(label, lx, ly + LABEL_H - 3);
+          ctx.save();
+          ctx.strokeStyle = CUT_COLOR;
+          ctx.lineWidth = CUT_STROKE;
+          ctx.strokeRect(lx, ly + LABEL_H, pw, ph);
+          ctx.restore();
+        },
+      });
+    }
+
+    // ── Rotation rod ─────────────────────────────────────────────────────
+    if (obj.movement.type === "rotation") {
+      const anchor = getRotationAnchor(obj);
+      const drawAngle = bestRotationDrawAngle(anchor.x, anchor.y);
+      const geo = rotLeverGeoAt(obj, 0, 0, canvasW, canvasH, revealRatio, drawAngle);
+      const pw = Math.ceil(geo.dims.leverLength);
+      const ph = Math.ceil(geo.dims.rodWidth);
+      const holeR = geo.dims.rodWidth * 0.3;
+      pieces.push({
+        w: pw,
+        h: ph + LABEL_H,
+        draw(lx, ly) {
+          ctx.fillStyle = "#555";
+          ctx.font = "11px sans-serif";
+          ctx.fillText(label, lx, ly + LABEL_H - 3);
+          ctx.save();
+          ctx.strokeStyle = CUT_COLOR;
+          ctx.lineWidth = CUT_STROKE;
+          ctx.strokeRect(lx, ly + LABEL_H, pw, ph);
+          // Pivot hole at the left (pivot) end
+          punchHole(ctx, lx + holeR + 2, ly + LABEL_H + ph / 2, holeR);
+          ctx.restore();
+        },
+      });
+    }
+
+    // ── Slide strip ──────────────────────────────────────────────────────
+    if (obj.movement.type === "slide") {
+      const geo = slideStripGeo(obj, canvasW, canvasH);
+      // Normalise to horizontal: rotate 90° if strip is taller than wide
+      const needsFlip = geo.h > geo.w;
+      const pw = needsFlip ? geo.h : geo.w;
+      const ph = needsFlip ? geo.w : geo.h;
+      // Fold line position along the pw axis (where the two image cells meet)
+      const foldAt = geo.isVertical ? obj.height : obj.width;
+
+      pieces.push({
+        w: pw,
+        h: ph + LABEL_H,
+        draw(lx, ly) {
+          const ry = ly + LABEL_H;
+          ctx.fillStyle = "#555";
+          ctx.font = "11px sans-serif";
+          ctx.fillText(label, lx, ly + LABEL_H - 3);
+          ctx.save();
+          ctx.strokeStyle = CUT_COLOR;
+          ctx.lineWidth = CUT_STROKE;
+          ctx.strokeRect(lx, ry, pw, ph);
+          // Dashed fold line between the two image cells
+          ctx.strokeStyle = "#888888";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(lx + foldAt, ry);
+          ctx.lineTo(lx + foldAt, ry + ph);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+        },
+      });
+    }
+  }
+
+  // ── Row layout ───────────────────────────────────────────────────────────
+  const availW = A4_W_PX - MARGIN * 2;
+  let px = MARGIN;
+  let py = MARGIN + 34; // space below title
+  let rowH = 0;
+
+  for (const piece of pieces) {
+    if (px > MARGIN && px + piece.w > MARGIN + availW) {
+      // Wrap to next row
+      px = MARGIN;
+      py += rowH + GAP;
+      rowH = 0;
+    }
+    piece.draw(px, py);
+    px += piece.w + GAP;
+    rowH = Math.max(rowH, piece.h);
+  }
+
+  ctx.fillStyle = "#333";
+  ctx.font = "bold 15px sans-serif";
+  ctx.fillText("LEVER PRINT SHEET  (cut solid lines only)", MARGIN, MARGIN + 18);
+
+  return canvas.toDataURL("image/png");
 }
 
 // ─── main entry ──────────────────────────────────────────────────────────────
@@ -904,11 +977,30 @@ export async function buildFabricationSheets(
   revealRatio: number,
 ): Promise<FabricationSheets> {
   const [leversDataUrl, objectsDataUrl, backgroundDataUrl] = await Promise.all([
-    Promise.resolve(renderLeversSheet(objects, canvasW, canvasH, revealRatio)),
+    Promise.resolve(
+      renderLeversSheet(objects, canvasW, canvasH, revealRatio),
+    ),
     renderObjectsSheet(background, objects, canvasW, canvasH),
     renderBackgroundSheet(background, objects, canvasW, canvasH),
   ]);
-  return { leversDataUrl, objectsDataUrl, backgroundDataUrl };
+  const printDataUrl = renderLeverPrintSheet(objects, canvasW, canvasH, revealRatio);
+  return { leversDataUrl, objectsDataUrl, backgroundDataUrl, printDataUrl };
+}
+
+// ─── download helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Wrap an A4 PNG data URL in a single-page PDF and trigger download.
+ * Uses jsPDF with mm units so the image fills the A4 page exactly.
+ */
+export async function downloadPdf(
+  dataUrl: string,
+  filename: string,
+): Promise<void> {
+  const { jsPDF } = await import("jspdf");
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+  pdf.addImage(dataUrl, "PNG", 0, 0, 297, 210);
+  pdf.save(filename);
 }
 
 export function downloadPng(dataUrl: string, filename: string) {

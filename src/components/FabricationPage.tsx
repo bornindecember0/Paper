@@ -8,7 +8,7 @@
 
 import { useState, useEffect } from "react";
 import type { CanvasObject } from "../types";
-import { buildFabricationSheets, downloadPng } from "../fabricationExport";
+import { buildFabricationSheets, downloadPdf } from "../fabricationExport";
 
 interface Props {
   background: string | null;
@@ -23,6 +23,7 @@ interface Sheets {
   leversDataUrl: string;
   objectsDataUrl: string;
   backgroundDataUrl: string;
+  printDataUrl: string;
 }
 
 const STEPS = [
@@ -65,7 +66,7 @@ export function FabricationPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<
-    "levers" | "objects" | "background"
+    "levers" | "objects" | "background" | "print"
   >("levers");
 
   useEffect(() => {
@@ -93,13 +94,16 @@ export function FabricationPage({
       ? sheets.leversDataUrl
       : activeTab === "objects"
         ? sheets.objectsDataUrl
-        : sheets.backgroundDataUrl
+        : activeTab === "background"
+          ? sheets.backgroundDataUrl
+          : sheets.printDataUrl
     : null;
 
   const labels: Record<typeof activeTab, string> = {
     levers: "Layer 1 — Levers",
     objects: "Layer 2 — Objects",
     background: "Layer 3 — Background",
+    print: "Lever Print Sheet",
   };
 
   return (
@@ -154,7 +158,7 @@ export function FabricationPage({
         <section className="fab-preview-area">
           {/* Tab switcher */}
           <div className="fab-tabs">
-            {(["levers", "objects", "background"] as const).map((tab) => (
+            {(["levers", "objects", "background", "print"] as const).map((tab) => (
               <button
                 key={tab}
                 className={`fab-tab ${activeTab === tab ? "active" : ""}`}
@@ -163,6 +167,7 @@ export function FabricationPage({
                 {tab === "levers" ? "Levers" : null}
                 {tab === "objects" ? "Objects" : null}
                 {tab === "background" ? "Background" : null}
+                {tab === "print" ? "Lever Print" : null}
               </button>
             ))}
           </div>
@@ -197,46 +202,45 @@ export function FabricationPage({
               <button
                 className="fab-dl-btn"
                 onClick={() =>
-                  downloadPng(sheets.leversDataUrl, "cut-levers.png")
+                  downloadPdf(sheets.leversDataUrl, "cut-levers.pdf")
                 }
               >
-                ↓ Levers PNG
+                ↓ Levers PDF
               </button>
               <button
                 className="fab-dl-btn"
                 onClick={() =>
-                  downloadPng(sheets.objectsDataUrl, "cut-objects.png")
+                  downloadPdf(sheets.objectsDataUrl, "cut-objects.pdf")
                 }
               >
-                ↓ Objects PNG
+                ↓ Objects PDF
               </button>
               <button
                 className="fab-dl-btn"
                 onClick={() =>
-                  downloadPng(sheets.backgroundDataUrl, "cut-background.png")
+                  downloadPdf(sheets.backgroundDataUrl, "cut-background.pdf")
                 }
               >
-                ↓ Background PNG
+                ↓ Background PDF
+              </button>
+              <button
+                className="fab-dl-btn"
+                onClick={() =>
+                  downloadPdf(sheets.printDataUrl, "cut-lever-print.pdf")
+                }
+              >
+                ↓ Lever Print PDF
               </button>
               <button
                 className="fab-dl-btn fab-dl-btn-all"
-                onClick={() => {
-                  downloadPng(sheets.leversDataUrl, "cut-levers.png");
-                  setTimeout(
-                    () => downloadPng(sheets.objectsDataUrl, "cut-objects.png"),
-                    200,
-                  );
-                  setTimeout(
-                    () =>
-                      downloadPng(
-                        sheets.backgroundDataUrl,
-                        "cut-background.png",
-                      ),
-                    400,
-                  );
+                onClick={async () => {
+                  await downloadPdf(sheets.leversDataUrl, "cut-levers.pdf");
+                  await downloadPdf(sheets.objectsDataUrl, "cut-objects.pdf");
+                  await downloadPdf(sheets.backgroundDataUrl, "cut-background.pdf");
+                  await downloadPdf(sheets.printDataUrl, "cut-lever-print.pdf");
                 }}
               >
-                ↓ Download All 3
+                ↓ Download All 4
               </button>
             </div>
           )}

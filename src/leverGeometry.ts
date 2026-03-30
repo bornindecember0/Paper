@@ -116,21 +116,25 @@ function transitionFabricationSheetLeverCap(
   return minAlongPath;
 }
 
-/** Rotation lever at t=0 uses angle -π/2 → direction (0, -1) in canvas coords. */
+/**
+ * How far the rotation lever can extend from the anchor in the given draw
+ * direction before hitting the fabrication sheet edge.
+ * drawAngle defaults to -π/2 (straight up) when not provided.
+ */
 function rotationFabricationSheetLeverCap(
   obj: CanvasObject,
   totalLeverH: number,
   canvasW: number,
   canvasH: number,
   rodWidth: number,
+  drawAngle = -Math.PI / 2,
 ): number {
   const anchor = getRotationAnchor(obj);
   const px = anchor.x;
   const py = totalLeverH + anchor.y;
   const edgeMargin = 36 + rodWidth * 0.5;
-  const ROT_START = -Math.PI / 2;
-  const nx = Math.cos(ROT_START);
-  const ny = Math.sin(ROT_START);
+  const nx = Math.cos(drawAngle);
+  const ny = Math.sin(drawAngle);
   return maxLeverToFabricationSheetEdge(
     px,
     py,
@@ -307,13 +311,17 @@ function estimateRotationMaxExitDist(
   return maxExit;
 }
 
-/** Rotation lever dimensions (fixed length, rod width). */
+/** Rotation lever dimensions (fixed length, rod width).
+ *  drawAngle: the angle at which the lever will be drawn on the fabrication
+ *  sheet. When provided, sheetCap is computed for that direction so the lever
+ *  is never capped below the minimum functional length. */
 export function getRotationDims(
   obj: CanvasObject,
   totalLeverH: number,
   canvasW: number,
   canvasH: number,
   revealRatio = DEFAULT_LEVER_REVEAL_RATIO,
+  drawAngle?: number,
 ): { leverLength: number; rodWidth: number } {
   const anchor = getRotationAnchor(obj);
   const shortSide = Math.max(1, Math.min(obj.width, obj.height));
@@ -331,6 +339,7 @@ export function getRotationDims(
     canvasW,
     canvasH,
     rodWidth,
+    drawAngle,
   );
   const safeMaxLength = Math.max(
     LEVER_LENGTH_MIN,
