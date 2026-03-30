@@ -18,11 +18,7 @@
  *        rotation anchor hole, and outer border
  */
 
-import type {
-  CanvasObject,
-  SlideMovement,
-  TransitionMovement,
-} from "./types";
+import type { CanvasObject, SlideMovement, TransitionMovement } from "./types";
 import {
   getTransitionDims,
   getRotationDims,
@@ -41,6 +37,86 @@ const TAB_THICK = 28;
 const ALPHA_THRESH = 30;
 /** Extra length beyond the strip that sticks out so you can grip the tab. */
 const GRIP_EXTRA = 40;
+
+// ─── print dimensions (300 DPI, 8.5 × 11 inch) ───────────────────────────────
+const PRINT_DPI = 300;
+/** Landscape: 11" wide × 8.5" tall */
+const PRINT_LANDSCAPE_W = Math.round(11 * PRINT_DPI); // 3300 px
+const PRINT_LANDSCAPE_H = Math.round(8.5 * PRINT_DPI); // 2550 px
+/** Portrait: 8.5" wide × 11" tall */
+const PRINT_PORTRAIT_W = Math.round(8.5 * PRINT_DPI); // 2550 px
+const PRINT_PORTRAIT_H = Math.round(11 * PRINT_DPI); // 3300 px
+
+/**
+ * Inject a pHYs chunk into a PNG data-URL so printers know to render it at
+ * exactly PRINT_DPI.  The pHYs chunk must come after the IHDR chunk.
+ *
+ * PNG binary layout:
+ *   8-byte signature | IHDR chunk (4+4+13+4 = 25 bytes) | …other chunks…
+ * We insert pHYs immediately after IHDR (byte offset 33).
+ */
+function injectDpi(dataUrl: string): string {
+  // Decode base64 payload
+  const b64 = dataUrl.split(",")[1];
+  const bin = atob(b64);
+  const src = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) src[i] = bin.charCodeAt(i);
+
+  // Build the pHYs chunk (9 data bytes: 4 ppuX + 4 ppuY + 1 unit)
+  const PIXELS_PER_METER = Math.round(PRINT_DPI / 0.0254); // ~11811
+  const pHYsData = new Uint8Array(9);
+  const view = new DataView(pHYsData.buffer);
+  view.setUint32(0, PIXELS_PER_METER); // pixels per unit X
+  view.setUint32(4, PIXELS_PER_METER); // pixels per unit Y
+  pHYsData[8] = 1; // unit = metre
+
+  // CRC32 over chunk type + data
+  const chunkType = new TextEncoder().encode("pHYs");
+  const crcInput = new Uint8Array(4 + 9);
+  crcInput.set(chunkType, 0);
+  crcInput.set(pHYsData, 4);
+  const crc = crc32(crcInput);
+
+  // Assemble the 4+4+9+4 = 21-byte chunk
+  const chunk = new Uint8Array(21);
+  const cv = new DataView(chunk.buffer);
+  cv.setUint32(0, 9); // data length
+  chunk.set(chunkType, 4); // "pHYs"
+  chunk.set(pHYsData, 8); // data
+  cv.setUint32(17, crc >>> 0); // CRC
+
+  // Insert after IHDR (signature=8 bytes, IHDR chunk=4+4+13+4=25 bytes → offset 33)
+  const INSERT_AT = 33;
+  const dst = new Uint8Array(src.length + chunk.length);
+  dst.set(src.subarray(0, INSERT_AT), 0);
+  dst.set(chunk, INSERT_AT);
+  dst.set(src.subarray(INSERT_AT), INSERT_AT + chunk.length);
+
+  // Re-encode to base64 data URL
+  let out = "";
+  dst.forEach((b) => (out += String.fromCharCode(b)));
+  return "data:image/png;base64," + btoa(out);
+}
+
+/** Standard CRC32 used by PNG. */
+function crc32(buf: Uint8Array): number {
+  const table = crc32Table();
+  let crc = 0xffffffff;
+  for (const b of buf) crc = (crc >>> 8) ^ table[(crc ^ b) & 0xff];
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+let _crcTable: Uint32Array | null = null;
+function crc32Table(): Uint32Array {
+  if (_crcTable) return _crcTable;
+  _crcTable = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    _crcTable[n] = c;
+  }
+  return _crcTable;
+}
 
 export interface FabricationSheets {
   leversDataUrl: string;
@@ -258,13 +334,7 @@ function rotLeverGeoAt(
   canvasH: number,
   revealRatio: number,
 ) {
-  const dims = getRotationDims(
-    obj,
-    totalLeverH,
-    canvasW,
-    canvasH,
-    revealRatio,
-  );
+  const dims = getRotationDims(obj, totalLeverH, canvasW, canvasH, revealRatio);
   const totalDegRad = Math.PI * 2;
   const angle = ROT_START + t * totalDegRad;
   const dx = Math.cos(angle),
@@ -375,6 +445,33 @@ function getAlphaPolygons(off: HTMLCanvasElement): Pt[][] {
     .filter((p) => p.length >= 3);
 }
 
+// ─── print scaling helper ─────────────────────────────────────────────────────
+
+/**
+ * Scale any canvas to landscape 8.5×11" at 300 DPI, centered on a white page,
+ * then inject pHYs metadata so printers output at the correct physical size.
+ */
+function scaleToPrintLandscape(src: HTMLCanvasElement): string {
+  const fitScale = Math.min(
+    PRINT_LANDSCAPE_W / src.width,
+    PRINT_LANDSCAPE_H / src.height,
+  );
+  const drawW = Math.round(src.width * fitScale);
+  const drawH = Math.round(src.height * fitScale);
+  const offX = Math.round((PRINT_LANDSCAPE_W - drawW) / 2);
+  const offY = Math.round((PRINT_LANDSCAPE_H - drawH) / 2);
+
+  const print = document.createElement("canvas");
+  print.width = PRINT_LANDSCAPE_W;
+  print.height = PRINT_LANDSCAPE_H;
+  const pctx = print.getContext("2d")!;
+  pctx.fillStyle = "#ffffff";
+  pctx.fillRect(0, 0, PRINT_LANDSCAPE_W, PRINT_LANDSCAPE_H);
+  pctx.drawImage(src, offX, offY, drawW, drawH);
+
+  return injectDpi(print.toDataURL("image/png"));
+}
+
 // ─── Sheet 1: LEVERS ─────────────────────────────────────────────────────────
 //
 // Translation / rotation: full rod pivot→tip.
@@ -387,17 +484,18 @@ function renderLeversSheet(
   revealRatio: number,
 ): string {
   const pad = FABRICATION_LEVER_SHEET_PAD;
-  const totalW = canvasW + pad * 2;
-  const totalH = canvasH + pad * 2;
+  const srcW = canvasW + pad * 2;
+  const srcH = canvasH + pad * 2;
   const totalLeverH = 0;
 
-  const canvas = document.createElement("canvas");
-  canvas.width = totalW;
-  canvas.height = totalH;
-  const ctx = canvas.getContext("2d")!;
+  // Draw everything at source (screen) resolution first, then scale to print.
+  const src = document.createElement("canvas");
+  src.width = srcW;
+  src.height = srcH;
+  const ctx = src.getContext("2d")!;
 
   ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, totalW, totalH);
+  ctx.fillRect(0, 0, srcW, srcH);
 
   // Dashed canvas boundary
   ctx.save();
@@ -478,8 +576,33 @@ function renderLeversSheet(
   ctx.fillStyle = "#333";
   ctx.font = "bold 16px sans-serif";
   ctx.fillText("LAYER 1 — LEVERS  (cut solid lines only)", 18, 22);
-  drawRegMarks(ctx, totalW, totalH);
-  return canvas.toDataURL("image/png");
+  drawRegMarks(ctx, srcW, srcH);
+
+  // ── Scale to print dimensions ─────────────────────────────────────────────
+  // If the source aspect ratio is taller than landscape, use portrait instead.
+  const srcAspect = srcW / srcH;
+  const landscapeAspect = PRINT_LANDSCAPE_W / PRINT_LANDSCAPE_H;
+  const printW =
+    srcAspect >= landscapeAspect ? PRINT_LANDSCAPE_W : PRINT_PORTRAIT_W;
+  const printH =
+    srcAspect >= landscapeAspect ? PRINT_LANDSCAPE_H : PRINT_PORTRAIT_H;
+
+  // Fit the source content inside the print page with uniform margins.
+  const fitScale = Math.min(printW / srcW, printH / srcH);
+  const drawW = Math.round(srcW * fitScale);
+  const drawH = Math.round(srcH * fitScale);
+  const offX = Math.round((printW - drawW) / 2);
+  const offY = Math.round((printH - drawH) / 2);
+
+  const print = document.createElement("canvas");
+  print.width = printW;
+  print.height = printH;
+  const pctx = print.getContext("2d")!;
+  pctx.fillStyle = "#ffffff";
+  pctx.fillRect(0, 0, printW, printH);
+  pctx.drawImage(src, offX, offY, drawW, drawH);
+
+  return injectDpi(print.toDataURL("image/png"));
 }
 
 // ─── Sheet 2: OBJECTS ────────────────────────────────────────────────────────
@@ -588,7 +711,7 @@ async function renderObjectsSheet(
 
   // ── Slide strips appended below ─────────────────────────────────────────
   const slideObjs = objects.filter((o) => o.movement?.type === "slide");
-  if (slideObjs.length === 0) return canvas.toDataURL("image/png");
+  if (slideObjs.length === 0) return scaleToPrintLandscape(canvas);
 
   const LABEL_H = 28,
     GAP = 16;
@@ -690,7 +813,7 @@ async function renderObjectsSheet(
     yOff += isV ? imgH * 2 + GAP : imgH + GAP;
   }
 
-  return combined.toDataURL("image/png");
+  return scaleToPrintLandscape(combined);
 }
 
 // ─── Sheet 3: BACKGROUND ─────────────────────────────────────────────────────
@@ -768,7 +891,7 @@ async function renderBackgroundSheet(
   ctx.fillText("LAYER 3 — BACKGROUND  (cut solid lines only)", 10, 20);
   drawRegMarks(ctx, canvasW, canvasH);
 
-  return canvas.toDataURL("image/png");
+  return scaleToPrintLandscape(canvas);
 }
 
 // ─── main entry ──────────────────────────────────────────────────────────────
@@ -781,9 +904,7 @@ export async function buildFabricationSheets(
   revealRatio: number,
 ): Promise<FabricationSheets> {
   const [leversDataUrl, objectsDataUrl, backgroundDataUrl] = await Promise.all([
-    Promise.resolve(
-      renderLeversSheet(objects, canvasW, canvasH, revealRatio),
-    ),
+    Promise.resolve(renderLeversSheet(objects, canvasW, canvasH, revealRatio)),
     renderObjectsSheet(background, objects, canvasW, canvasH),
     renderBackgroundSheet(background, objects, canvasW, canvasH),
   ]);
