@@ -190,7 +190,7 @@ function slideStripGeo(
   const imgW = obj.width,
     imgH = obj.height;
 
-  const stripLen = (isV ? imgH : imgW) * 2 + TAB_THICK + GRIP_EXTRA;
+  const stripLen = (isV ? canvasH : canvasW) + TAB_THICK + GRIP_EXTRA;
   const stripCross = isV ? imgW : imgH;
 
   const winX = obj.position.x - imgW / 2;
@@ -451,8 +451,7 @@ function drawCanvasBoundary(
   ctx.restore();
 }
 
-// ─── Sheet 1: LEVERS ─────────────────────────────────────────────────────────
-
+// ─── Sheet 1: BASE ─────────────────────────────────────────────────────────
 function renderLeversSheet(
   objects: CanvasObject[],
   canvasW: number,
@@ -463,79 +462,60 @@ function renderLeversSheet(
   const ox = CANVAS_OFFSET_X;
   const oy = CANVAS_OFFSET_Y;
 
-  drawCanvasBoundary(ctx, ox, oy, canvasW, canvasH);
-
-  // All drawing below is in canvas-local coordinates via translate
+  // Solid border in page space (no translate active)
   ctx.save();
-  ctx.translate(ox, oy);
   ctx.strokeStyle = CUT_COLOR;
   ctx.lineWidth = CUT_STROKE;
+  ctx.strokeRect(ox, oy, canvasW, canvasH);
+  ctx.restore();
 
-  let leverIdx = 0;
-  const labelFont = "11px sans-serif";
+  // Holder indicators for slide objects
+  ctx.save();
+  ctx.translate(ox, oy);
 
   objects.forEach((obj) => {
-    if (!obj.movement) return;
-    leverIdx++;
-    const tag = `#${leverIdx} ${obj.movement.type}`;
+    if (obj.movement?.type !== "slide") return;
+    const m = obj.movement as SlideMovement;
+    const isV = m.direction === "vertical";
+    const imgW = obj.width, imgH = obj.height;
+    const winX = obj.position.x - imgW / 2;
+    const winY = obj.position.y - imgH / 2;
+    const GAP = 40;
 
-    if (obj.movement.type === "transition") {
-      const geo = transLeverGeoAt(obj, 0, 0, canvasW, canvasH, revealRatio);
-      drawFullRod(ctx, geo.pivot, geo.tip, geo.dims.rodWidth);
-      ctx.save();
-      ctx.fillStyle = "#555";
-      ctx.font = labelFont;
-      ctx.fillText(tag, geo.pivot.x + 4, geo.pivot.y - geo.dims.rodWidth / 2 - 3);
-      ctx.restore();
+    let hx = 0, hy = 0, hw = 0, hh = 0;
+
+    if (isV) {
+      // vertical slider: holder is wide and short, placed above/below window
+      hw = imgW;
+      hh = imgH * 0.25;
+      hx = winX + (imgW - hw) / 2;
+      hy = m.pullDirection === "up" ? winY + imgH + GAP : winY - hh - GAP;
+    } else {
+      // horizontal slider: holder is tall and thin, placed left/right of window
+      hw = imgW * 0.25;
+      hh = imgH;
+      hy = winY + (imgH - hh) / 2;
+      hx = m.pullDirection === "left" ? winX + imgW + GAP : winX - hw - GAP;
     }
 
-    if (obj.movement.type === "rotation") {
-      const anchor = getRotationAnchor(obj);
-      const drawAngle = bestRotationDrawAngle(anchor.x, anchor.y);
-      const geo = rotLeverGeoAt(obj, 0, 0, canvasW, canvasH, revealRatio, drawAngle);
-      drawFullRod(ctx, geo.pivot, geo.tip, geo.dims.rodWidth);
-      punchHole(ctx, geo.pivot.x, geo.pivot.y, geo.dims.rodWidth * 0.3);
-      ctx.save();
-      ctx.fillStyle = "#555";
-      ctx.font = labelFont;
-      ctx.fillText(tag, geo.pivot.x + 4, geo.pivot.y - geo.dims.rodWidth / 2 - 3);
-      ctx.restore();
-    }
-
-    if (obj.movement.type === "slide") {
-      const geo = slideStripGeo(obj, canvasW, canvasH);
-      ctx.strokeRect(geo.x, geo.y, geo.w, geo.h);
-      ctx.save();
-      ctx.fillStyle = "#555";
-      ctx.font = labelFont;
-      ctx.fillText(tag, geo.x + 4, geo.y - 4);
-      ctx.strokeStyle = "#888888";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      if (geo.isVertical) {
-        const midY = geo.y + obj.height;
-        ctx.beginPath();
-        ctx.moveTo(geo.x, midY);
-        ctx.lineTo(geo.x + geo.w, midY);
-        ctx.stroke();
-      } else {
-        const midX = geo.x + obj.width;
-        ctx.beginPath();
-        ctx.moveTo(midX, geo.y);
-        ctx.lineTo(midX, geo.y + geo.h);
-        ctx.stroke();
-      }
-      ctx.setLineDash([]);
-      ctx.restore();
-    }
+    ctx.save();
+    ctx.strokeStyle = CUT_COLOR;
+    ctx.lineWidth = CUT_STROKE;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(hx, hy, hw, hh);
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#555";
+    ctx.font = "11px sans-serif";
+    ctx.fillText("slide holder", hx + 4, hy - 4);
+    ctx.restore();
   });
 
   ctx.restore();
 
   ctx.fillStyle = "#333";
   ctx.font = "bold 15px sans-serif";
-  ctx.fillText("LAYER 1 — LEVERS  (cut solid lines only)", ox + 10, oy - 10);
   drawRegMarks(ctx, ox, oy, canvasW, canvasH);
+  ctx.fillText("LAYER 1 — BASE  (cut solid lines only)", 10, 20);
 
   return canvas.toDataURL("image/png");
 }
@@ -642,20 +622,25 @@ async function renderObjectsSheet(
       ? (imgMap.get(afterObj.imageUrl)?.img ?? null)
       : null;
 
+    const firstImg = beforeImg;
+    const secondImg =  afterImg ;
+
     const geo = slideStripGeo(obj, canvasW, canvasH);
 
     // [after, before] ordering matches CanvasArea play-mode
     type Cell = { imgEl: HTMLImageElement | null; cx: number; cy: number };
+    const tabOffset = (m.pullDirection === "up" || m.pullDirection === "left")
+      ? TAB_THICK + GRIP_EXTRA : 0;
     const cells: Cell[] = isV
       ? [
-          { imgEl: afterImg, cx: geo.x, cy: geo.y },
-          { imgEl: beforeImg, cx: geo.x, cy: geo.y + imgH },
+          { imgEl: firstImg,  cx: winX, cy: geo.y + tabOffset + winY },
+          { imgEl: secondImg, cx: winX, cy: geo.y + tabOffset + winY + (m.pullDirection === "down" ? -imgH : imgH) },
         ]
       : [
-          { imgEl: afterImg, cx: geo.x, cy: geo.y },
-          { imgEl: beforeImg, cx: geo.x + imgW, cy: geo.y },
+          { imgEl: firstImg,  cx: geo.x + tabOffset + winX, cy: winY },
+          { imgEl: secondImg, cx: geo.x + tabOffset + winX + (m.pullDirection === "right" ? -imgW : imgW), cy: winY },
         ];
-
+      
     for (const cell of cells) {
       ctx.save();
       ctx.beginPath();
@@ -690,7 +675,6 @@ async function renderObjectsSheet(
       ctx.save();
       ctx.strokeStyle = CUT_COLOR;
       ctx.lineWidth = CUT_STROKE;
-      ctx.strokeRect(cell.cx, cell.cy, imgW, imgH);
       ctx.restore();
     }
 
@@ -700,44 +684,15 @@ async function renderObjectsSheet(
     ctx.lineWidth = CUT_STROKE;
     ctx.strokeRect(geo.x, geo.y, geo.w, geo.h);
     ctx.restore();
-
-    // Dashed fold line at cell join
-    ctx.save();
-    ctx.strokeStyle = "#888888";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
-    if (isV) {
-      const midY = geo.y + imgH;
-      ctx.beginPath();
-      ctx.moveTo(geo.x, midY);
-      ctx.lineTo(geo.x + geo.w, midY);
-      ctx.stroke();
-    } else {
-      const midX = geo.x + imgW;
-      ctx.beginPath();
-      ctx.moveTo(midX, geo.y);
-      ctx.lineTo(midX, geo.y + geo.h);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-    ctx.restore();
   }
 
-  // Dashed canvas boundary
   ctx.save();
-  ctx.strokeStyle = "#aaaaaa";
-  ctx.lineWidth = 1;
-  ctx.setLineDash([6, 4]);
-  ctx.strokeRect(1, 1, canvasW - 2, canvasH - 2);
-  ctx.setLineDash([]);
   ctx.restore();
-
   ctx.restore(); // undo translate
 
   ctx.fillStyle = "#333";
   ctx.font = "bold 15px sans-serif";
-  ctx.fillText("LAYER 2 — OBJECTS  (cut solid lines only)", ox + 10, oy - 10);
-  drawRegMarks(ctx, ox, oy, canvasW, canvasH);
+  ctx.fillText("LAYER 2 — OBJECTS  (cut solid lines only)", 10, 20);
 
   return canvas.toDataURL("image/png");
 }
@@ -813,7 +768,7 @@ async function renderBackgroundSheet(
 
   ctx.fillStyle = "#333";
   ctx.font = "bold 15px sans-serif";
-  ctx.fillText("LAYER 3 — BACKGROUND  (cut solid lines only)", ox + 10, oy - 10);
+  ctx.fillText("LAYER 3 — BACKGROUND  (cut solid lines only)", 10, 20);
   drawRegMarks(ctx, ox, oy, canvasW, canvasH);
 
   return canvas.toDataURL("image/png");
@@ -874,6 +829,8 @@ function renderLeverPrintSheet(
           ctx.strokeStyle = CUT_COLOR;
           ctx.lineWidth = CUT_STROKE;
           ctx.strokeRect(lx, ly + LABEL_H, pw, ph);
+          const holeR = ph * 0.3;
+          punchHole(ctx, lx + holeR * 1.5, ly + LABEL_H + ph / 2, holeR);
           ctx.restore();
         },
       });
@@ -886,7 +843,6 @@ function renderLeverPrintSheet(
       const geo = rotLeverGeoAt(obj, 0, 0, canvasW, canvasH, revealRatio, drawAngle);
       const pw = Math.ceil(geo.dims.leverLength);
       const ph = Math.ceil(geo.dims.rodWidth);
-      const holeR = geo.dims.rodWidth * 0.3;
       pieces.push({
         w: pw,
         h: ph + LABEL_H,
@@ -898,47 +854,35 @@ function renderLeverPrintSheet(
           ctx.strokeStyle = CUT_COLOR;
           ctx.lineWidth = CUT_STROKE;
           ctx.strokeRect(lx, ly + LABEL_H, pw, ph);
-          // Pivot hole at the left (pivot) end
-          punchHole(ctx, lx + holeR + 2, ly + LABEL_H + ph / 2, holeR);
+          const holeR = ph * 0.3;
+          punchHole(ctx, lx + holeR * 1.5, ly + LABEL_H + ph / 2, holeR);
           ctx.restore();
         },
       });
     }
 
-    // ── Slide strip ──────────────────────────────────────────────────────
+    // ── Slide holders (two per slide) ───────────────────────────────────────
     if (obj.movement.type === "slide") {
-      const geo = slideStripGeo(obj, canvasW, canvasH);
-      // Normalise to horizontal: rotate 90° if strip is taller than wide
-      const needsFlip = geo.h > geo.w;
-      const pw = needsFlip ? geo.h : geo.w;
-      const ph = needsFlip ? geo.w : geo.h;
-      // Fold line position along the pw axis (where the two image cells meet)
-      const foldAt = geo.isVertical ? obj.height : obj.width;
-
+      const m = obj.movement as SlideMovement;
+      const isV = (m.direction === "vertical");
+      const holderW = Math.ceil((isV ? obj.width : obj.height) * 2.5);
+      const holderH = Math.ceil((isV ? obj.height : obj.width) * 0.25);
+      const holderLabel = `#${idx} slide holder ${1}`;
       pieces.push({
-        w: pw,
-        h: ph + LABEL_H,
+        w: holderW,
+        h: holderH + LABEL_H,
         draw(lx, ly) {
-          const ry = ly + LABEL_H;
           ctx.fillStyle = "#555";
           ctx.font = "11px sans-serif";
-          ctx.fillText(label, lx, ly + LABEL_H - 3);
+          ctx.fillText(holderLabel, lx, ly + LABEL_H - 3);
           ctx.save();
           ctx.strokeStyle = CUT_COLOR;
           ctx.lineWidth = CUT_STROKE;
-          ctx.strokeRect(lx, ry, pw, ph);
-          // Dashed fold line between the two image cells
-          ctx.strokeStyle = "#888888";
-          ctx.lineWidth = 1;
-          ctx.setLineDash([4, 3]);
-          ctx.beginPath();
-          ctx.moveTo(lx + foldAt, ry);
-          ctx.lineTo(lx + foldAt, ry + ph);
-          ctx.stroke();
-          ctx.setLineDash([]);
+          ctx.strokeRect(lx, ly + LABEL_H, holderW, holderH);
           ctx.restore();
         },
-      });
+        });
+      
     }
   }
 
@@ -962,7 +906,8 @@ function renderLeverPrintSheet(
 
   ctx.fillStyle = "#333";
   ctx.font = "bold 15px sans-serif";
-  ctx.fillText("LEVER PRINT SHEET  (cut solid lines only)", MARGIN, MARGIN + 18);
+  ctx.fillText("LEVER PRINT SHEET  (cut solid lines only)", 10, 20);
+
 
   return canvas.toDataURL("image/png");
 }

@@ -244,7 +244,7 @@ export function getTransitionDims(
   const travel = Math.hypot(dx, dy);
   const shortSide = Math.max(1, Math.min(obj.width, obj.height));
   const longSide = Math.max(obj.width, obj.height);
-  const rodWidth = clamp(shortSide * 0.16, 14, 28);
+  const rodWidth = clamp(shortSide * 0.16, 40, 40);
   const maxExitDist = estimateTransitionMaxExitDist(obj, totalLeverH, canvasW, canvasH);
   const minExpose = Math.max(rodWidth * 2.5, 36);
   const diagonalCap = Math.max(
@@ -325,7 +325,7 @@ export function getRotationDims(
 ): { leverLength: number; rodWidth: number } {
   const anchor = getRotationAnchor(obj);
   const shortSide = Math.max(1, Math.min(obj.width, obj.height));
-  const rodWidth = clamp(shortSide * 0.16, 14, 28);
+  const rodWidth = clamp(shortSide * 0.16, 40, 40);
   const maxExitDist = estimateRotationMaxExitDist(anchor, totalLeverH, canvasW, canvasH);
   const minExpose = Math.max(rodWidth * 2.5, 36);
   const longSide = Math.max(obj.width, obj.height);
