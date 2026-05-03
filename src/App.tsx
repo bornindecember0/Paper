@@ -10,7 +10,7 @@ import type { PullDirection } from "./components/SlideModal";
 import { CropModal } from "./components/CropModal";
 import { ObjectCropModal } from "./components/ObjectCropModal";
 import { PlayOverlay, getLeverAreaH } from "./components/PlayOverlay";
-import { FabricationPage } from "./components/FabricationPage"; // ← new
+import { FabricationPage } from "./components/FabricationPage";
 import { DEFAULT_LEVER_REVEAL_RATIO } from "./leverGeometry";
 import type { CanvasObject, Position } from "./types";
 
@@ -41,7 +41,7 @@ export default function App() {
   const [leverRevealRatio, setLeverRevealRatio] = useState(
     DEFAULT_LEVER_REVEAL_RATIO,
   );
-  const [showFabrication, setShowFabrication] = useState(false); // ← new
+  const [showFabrication, setShowFabrication] = useState(false);
 
   const selectedObject = objects.find((o) => o.id === selectedId);
   const objectsWithMovement = objects.filter((o) => o.movement);
@@ -60,10 +60,46 @@ export default function App() {
     setBgLocked(false);
   }, [background]);
 
-  const handleObjectUpload = useCallback((file: File) => {
-    const url = URL.createObjectURL(file);
-    setPendingCrop({ url, filename: file.name, objectId: "new" });
-  }, []);
+  const handleObjectUpload = useCallback(
+    (file: File, replaceId?: string) => {
+      const url = URL.createObjectURL(file);
+      if (replaceId) {
+        // Replace existing object
+        const objToReplace = objects.find((o) => o.id === replaceId);
+        if (objToReplace && objToReplace.imageUrl) {
+          URL.revokeObjectURL(objToReplace.imageUrl);
+        }
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 200;
+          let w = img.naturalWidth,
+            h = img.naturalHeight;
+          if (w > maxDim || h > maxDim) {
+            const r = Math.min(maxDim / w, maxDim / h);
+            w = Math.round(w * r);
+            h = Math.round(h * r);
+          }
+          setObjects((prev) =>
+            prev.map((o) =>
+              o.id === replaceId
+                ? {
+                    ...o,
+                    imageUrl: url,
+                    filename: file.name,
+                    width: w,
+                    height: h,
+                  }
+                : o,
+            ),
+          );
+        };
+        img.src = url;
+      } else {
+        setPendingCrop({ url, filename: file.name, objectId: "new" });
+      }
+    },
+    [objects],
+  );
 
   const finalizeCrop = useCallback(
     (croppedUrl: string) => {
@@ -239,6 +275,26 @@ export default function App() {
     },
     [selectedId],
   );
+
+  // ── Auto-animate (inverse design) ────────────────────────────────────────
+
+  const handleAutoAnimate = useCallback((updatedObjects: CanvasObject[]) => {
+    setObjects((prev) => {
+      const newObjects = [...prev];
+      for (const updated of updatedObjects) {
+        const index = newObjects.findIndex((o) => o.id === updated.id);
+        if (index !== -1) {
+          newObjects[index] = updated;
+        } else {
+          newObjects.push(updated);
+        }
+      }
+      return newObjects;
+    });
+    // Select the first animated object
+    const animatedId = updatedObjects.find((o) => o.movement !== undefined)?.id;
+    if (animatedId) setSelectedId(animatedId);
+  }, []);
 
   // ── Save → open fabrication page ─────────────────────────────────────────
 
@@ -465,6 +521,7 @@ export default function App() {
         onMovementOpen={handleMovementOpen}
         onClearMovement={handleClearMovement}
         onSave={handleSave}
+        onAutoAnimate={handleAutoAnimate}
         revealRatio={leverRevealRatio}
         onRevealRatioChange={setLeverRevealRatio}
         rotationConfigOpen={rotationConfigOpen}
@@ -504,4 +561,3 @@ export default function App() {
     </div>
   );
 }
-
