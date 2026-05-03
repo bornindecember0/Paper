@@ -25,7 +25,7 @@ function getAnimatedState(obj: CanvasObject, t: number): {
     };
   }
   if (movement.type === 'rotation') {
-    const totalDeg = 360 * t;
+    const totalDeg = (movement.angleDeg ?? 360) * t;
     const pivot = getRotationAnchor(obj);
     return { cx: pos.x, cy: pos.y, angleDeg: totalDeg, pivot };
   }
@@ -82,11 +82,13 @@ function drawTransitionArrow(ctx: CanvasRenderingContext2D, from: Position, to: 
 
 function drawRotationArc(
   ctx: CanvasRenderingContext2D,
-  anchor: Position, center: Position,
+  anchor: Position,
+  center: Position,
+  angleDeg = 360,
 ) {
   const radius = Math.hypot(center.x - anchor.x, center.y - anchor.y) + 18;
   const startAngle = Math.atan2(center.y - anchor.y, center.x - anchor.x);
-  const sweep = Math.PI * 2;
+  const sweep = (angleDeg * Math.PI) / 180;
   const endAngle = startAngle + sweep;
 
   ctx.save();
@@ -96,7 +98,7 @@ function drawRotationArc(
   ctx.arc(anchor.x, anchor.y, radius, startAngle, endAngle, false);
   ctx.stroke();
 
-  const arrowAngle = endAngle - 0.2;
+  const arrowAngle = endAngle - Math.sign(sweep || 1) * 0.2;
   arrowHead(
     ctx,
     anchor.x + radius * Math.cos(arrowAngle),
@@ -589,7 +591,14 @@ export function CanvasArea({
         // When picking anchor, skip rotation viz for selected object (user is setting anchor)
         if (pickingAnchor && obj.id === selectedId && obj.movement.type === 'rotation') return;
         if (obj.movement.type === 'transition') drawTransitionArrow(ctx, obj.position, obj.movement.endPoint);
-        else if (obj.movement.type === 'rotation') drawRotationArc(ctx, getRotationAnchor(obj), obj.position);
+        else if (obj.movement.type === 'rotation') {
+          drawRotationArc(
+            ctx,
+            getRotationAnchor(obj),
+            obj.position,
+            obj.movement.angleDeg ?? 360,
+          );
+        }
         else if (obj.movement.type === 'slide') drawSlideArrow(ctx, obj);
       });
     }

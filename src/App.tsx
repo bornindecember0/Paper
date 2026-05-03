@@ -11,6 +11,7 @@ import { CropModal } from "./components/CropModal";
 import { ObjectCropModal } from "./components/ObjectCropModal";
 import { PlayOverlay, getLeverAreaH } from "./components/PlayOverlay";
 import { FabricationPage } from "./components/FabricationPage"; // ← new
+import { Stage3WorkflowModal } from "./components/Stage3WorkflowModal";
 import { DEFAULT_LEVER_REVEAL_RATIO } from "./leverGeometry";
 import type { CanvasObject, Position } from "./types";
 
@@ -42,6 +43,7 @@ export default function App() {
     DEFAULT_LEVER_REVEAL_RATIO,
   );
   const [showFabrication, setShowFabrication] = useState(false); // ← new
+  const [stage3Open, setStage3Open] = useState(false);
 
   const selectedObject = objects.find((o) => o.id === selectedId);
   const objectsWithMovement = objects.filter((o) => o.movement);
@@ -181,6 +183,7 @@ export default function App() {
             movement: {
               type: "rotation",
               anchorPoint: anchorOffset,
+              angleDeg: 360,
             },
           };
         }),
@@ -245,6 +248,39 @@ export default function App() {
   const handleSave = useCallback(() => {
     setShowFabrication(true);
   }, []);
+
+  const handleStage3Import = useCallback(
+    ({
+      backgroundUrl,
+      bgFilename: nextBgFilename,
+      objects: nextObjects,
+    }: {
+      backgroundUrl: string;
+      bgFilename: string;
+      objects: CanvasObject[];
+      pipeline: unknown;
+    }) => {
+      if (background && background !== backgroundUrl) {
+        URL.revokeObjectURL(background);
+      }
+      setBackground(backgroundUrl);
+      setBgFilename(nextBgFilename);
+      setBgLocked(true);
+      setObjects(nextObjects);
+      const nextSliderValues: Record<string, number> = {};
+      nextObjects.forEach((obj) => {
+        if (obj.movement) nextSliderValues[obj.id] = 0;
+      });
+      setSliderValues(nextSliderValues);
+      setTab("play");
+      setSelectedId(null);
+      setPickingEndPoint(false);
+      setPickingAnchor(false);
+      setRotationConfigOpen(false);
+      setStage3Open(false);
+    },
+    [background],
+  );
 
   // ── Movement button dispatch ──────────────────────────────────────────────
 
@@ -463,6 +499,7 @@ export default function App() {
         onDeleteObject={handleDeleteObject}
         onObjectSelect={setSelectedId}
         onMovementOpen={handleMovementOpen}
+        onOpenStage3={() => setStage3Open(true)}
         onClearMovement={handleClearMovement}
         onSave={handleSave}
         revealRatio={leverRevealRatio}
@@ -501,7 +538,14 @@ export default function App() {
           onCancel={() => setDialog(null)}
         />
       )}
+
+      {stage3Open && (
+        <Stage3WorkflowModal
+          initialImageA={background ? { url: background, filename: bgFilename || "background" } : null}
+          onClose={() => setStage3Open(false)}
+          onImport={handleStage3Import}
+        />
+      )}
     </div>
   );
 }
-

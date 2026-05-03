@@ -134,28 +134,6 @@ function punchHole(
   ctx.restore();
 }
 
-function drawFullRod(
-  ctx: CanvasRenderingContext2D,
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  rodWidth: number,
-) {
-  const dx = to.x - from.x,
-    dy = to.y - from.y;
-  const len = Math.hypot(dx, dy);
-  if (len < 2) return;
-  const nx = -dy / len,
-    ny = dx / len;
-  const hw = rodWidth / 2;
-  ctx.beginPath();
-  ctx.moveTo(from.x + nx * hw, from.y + ny * hw);
-  ctx.lineTo(to.x + nx * hw, to.y + ny * hw);
-  ctx.lineTo(to.x - nx * hw, to.y - ny * hw);
-  ctx.lineTo(from.x - nx * hw, from.y - ny * hw);
-  ctx.closePath();
-  ctx.stroke();
-}
-
 // ─── slide strip geometry ─────────────────────────────────────────────────────
 //
 // The physical strip is two image cells joined along the movement axis, with a
@@ -434,29 +412,12 @@ function makeA4Canvas(): {
   return { canvas, ctx };
 }
 
-/** Draw dashed canvas-area boundary (page space). */
-function drawCanvasBoundary(
-  ctx: CanvasRenderingContext2D,
-  ox: number,
-  oy: number,
-  w: number,
-  h: number,
-) {
-  ctx.save();
-  ctx.strokeStyle = "#aaaaaa";
-  ctx.lineWidth = 1;
-  ctx.setLineDash([6, 4]);
-  ctx.strokeRect(ox, oy, w, h);
-  ctx.setLineDash([]);
-  ctx.restore();
-}
-
 // ─── Sheet 1: BASE ─────────────────────────────────────────────────────────
 function renderLeversSheet(
   objects: CanvasObject[],
   canvasW: number,
   canvasH: number,
-  revealRatio: number,
+  _revealRatio: number,
 ): string {
   const { canvas, ctx } = makeA4Canvas();
   const ox = CANVAS_OFFSET_X;

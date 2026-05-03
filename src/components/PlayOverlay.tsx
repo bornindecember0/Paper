@@ -47,7 +47,7 @@ function rotLeverGeometry(
     revealRatio,
   );
 
-  const totalDegRad = Math.PI * 2;
+  const totalDegRad = ((obj.movement?.type === 'rotation' ? obj.movement.angleDeg : 360) ?? 360) * (Math.PI / 180);
   const angle = ROT_START_ANGLE + t * totalDegRad;
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
@@ -468,6 +468,7 @@ export function PlayOverlay({
           <RotationLeverHitArea
             key={obj.id}
             t={t}
+            sweepDeg={obj.movement?.type === 'rotation' ? obj.movement.angleDeg ?? 360 : 360}
             geo={geo}
             padLeft={padLeft}
             padTop={padTop}
@@ -598,6 +599,7 @@ interface TransitionLeverHitAreaProps {
 
 interface RotationLeverHitAreaProps {
   t: number;
+  sweepDeg: number;
   geo: {
     visibleFrom: { x: number; y: number };
     visibleTo: { x: number; y: number };
@@ -611,12 +613,13 @@ interface RotationLeverHitAreaProps {
 
 function RotationLeverHitArea({
   t,
+  sweepDeg,
   geo,
   padLeft,
   padTop,
   onChange,
 }: RotationLeverHitAreaProps) {
-  const totalDegRad = Math.PI * 2;
+  const totalDegRad = sweepDeg * (Math.PI / 180) || Math.PI * 2;
 
   const dx = geo.visibleTo.x - geo.visibleFrom.x;
   const dy = geo.visibleTo.y - geo.visibleFrom.y;

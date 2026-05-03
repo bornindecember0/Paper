@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "export-objects": "tsx scripts/exportObjects.ts"
+    "export-objects": "tsx scripts/exportObjects.ts",
+    "sam-server": "bash -c 'exec \"${SAM_PYTHON:-/opt/anaconda3/envs/vlm-attn/bin/python}\" scripts/sam_server.py'"
   },
   "dependencies": {
     "@imgly/background-removal": "^1.7.0",

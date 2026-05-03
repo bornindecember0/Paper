@@ -103,7 +103,7 @@ export function buildExportData(
           type: 'rotation',
           anchorOffset: { ...movement.anchorPoint },
           anchorAbsolute: { x: anchorAbsolute.x, y: anchorAbsolute.y },
-          degrees: 360,
+          degrees: movement.angleDeg ?? 360,
           leverLength: dims.leverLength,
           rodWidth: dims.rodWidth,
         },

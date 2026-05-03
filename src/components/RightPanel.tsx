@@ -14,6 +14,7 @@ interface Props {
   onDeleteObject: (id: string) => void;
   onObjectSelect: (id: string) => void;
   onMovementOpen: (type: 'translate' | 'rotation' | 'slide') => void;
+  onOpenStage3: () => void;
   onClearMovement: () => void;
   onSave: () => void;
   revealRatio: number;
@@ -29,7 +30,7 @@ function movementLabel(obj: CanvasObject): string {
   const m = obj.movement;
   if (!m) return '';
   if (m.type === 'transition') return `→ (${Math.round(m.endPoint.x)}, ${Math.round(m.endPoint.y)})`;
-  if (m.type === 'rotation') return '↻ 360° (free)';
+  if (m.type === 'rotation') return `↻ ${Math.round(m.angleDeg ?? 360)}°`;
   if (m.type === 'slide') return `⇥ ${m.direction} ${m.range > 0 ? '+' : ''}${m.range}px`;
   return '';
 }
@@ -37,7 +38,7 @@ function movementLabel(obj: CanvasObject): string {
 export function RightPanel({
   tab, bgFilename, bgLocked, objects, selectedId,
   onBackgroundUpload, onDeleteBackground, onObjectUpload, onDeleteObject, onObjectSelect,
-  onMovementOpen, onClearMovement, onSave,
+  onMovementOpen, onOpenStage3, onClearMovement, onSave,
   revealRatio, onRevealRatioChange,
   rotationConfigOpen,
   onRotationPickAnchor, onRotationCancel,
@@ -203,6 +204,15 @@ export function RightPanel({
             </div>
           </div>
         )}
+      </div>
+      <div className="panel-section">
+        <div className="movement-header">Stage 3</div>
+        <p className="stage3-hint">
+          Open the dual-image workflow, annotate objects, run optimization, then import the generated JSON into the current canvas.
+        </p>
+        <button className="btn-save btn-stage3" onClick={onOpenStage3}>
+          open stage 3
+        </button>
       </div>
       <div className="lever-reveal-section">
           <div className="lever-reveal-section-title">Lever length</div>
