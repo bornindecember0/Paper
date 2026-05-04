@@ -207,9 +207,6 @@ export function RightPanel({
       </div>
       <div className="panel-section">
         <div className="movement-header">Stage 3</div>
-        <p className="stage3-hint">
-          Open the dual-image workflow, annotate objects, run optimization, then import the generated JSON into the current canvas.
-        </p>
         <button className="btn-save btn-stage3" onClick={onOpenStage3}>
           open stage 3
         </button>

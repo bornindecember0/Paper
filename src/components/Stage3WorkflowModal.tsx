@@ -428,7 +428,6 @@ function OptimizationPreviewGallery({
         />
         <div className="stage3-candidate-metrics">
           <div>image loss: {translation.imageMatchCost.toFixed(2)}</div>
-          <div>total: {translation.totalCost.toFixed(2)}</div>
         </div>
       </div>
 
@@ -448,7 +447,6 @@ function OptimizationPreviewGallery({
         />
         <div className="stage3-candidate-metrics">
           <div>image loss: {rotation.imageMatchCost.toFixed(2)}</div>
-          <div>total: {rotation.totalCost.toFixed(2)}</div>
         </div>
       </div>
     </div>
@@ -1128,7 +1126,7 @@ export function Stage3WorkflowModal({ initialImageA = null, onClose, onImport }:
           </div>
 
           <aside className="stage3-side">
-            <div className="stage3-side-section">
+            <div className="stage3-side-section stage3-side-section--scroll">
               <div className="stage3-side-title">Motion Inference</div>
               {results.length === 0 && <p className="stage3-empty">No objects optimized yet.</p>}
               {results.map((result, index) => (
@@ -1150,12 +1148,12 @@ export function Stage3WorkflowModal({ initialImageA = null, onClose, onImport }:
                         <div className="stage3-result-summary">
                           {result.movement.type === "transition" && (
                             <span>
-                              dx={result.movement.dx.toFixed(1)}, dy={result.movement.dy.toFixed(1)}, total={result.movement.totalCost.toFixed(2)}
+                              dx={result.movement.dx.toFixed(1)}, dy={result.movement.dy.toFixed(1)}, image={result.movement.imageMatchCost.toFixed(2)}
                             </span>
                           )}
                           {result.movement.type === "rotation" && (
                             <span>
-                              anchor=({result.movement.anchor.x}, {result.movement.anchor.y}), theta={result.movement.thetaDeg.toFixed(1)}deg, total={result.movement.totalCost.toFixed(2)}
+                              anchor=({result.movement.anchor.x}, {result.movement.anchor.y}), theta={result.movement.thetaDeg.toFixed(1)}deg, image={result.movement.imageMatchCost.toFixed(2)}
                             </span>
                           )}
                           {result.movement.type === "swapSlide" && (
@@ -1185,25 +1183,6 @@ export function Stage3WorkflowModal({ initialImageA = null, onClose, onImport }:
             </div>
 
             <div className="stage3-side-section">
-              <div className="stage3-side-title">Layer Assignment</div>
-              {!pipeline || pipeline.assignmentLogs.length === 0 ? (
-                <p className="stage3-empty">Layer assignment logs will appear after at least one object is optimized.</p>
-              ) : (
-                <div className="stage3-assignment-log">
-                  {pipeline.assignmentLogs.map((line) => (
-                    <div key={line} className="stage3-assignment-line">
-                      {line}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="stage3-side-section">
-              <div className="stage3-side-title">JSON Preview</div>
-              <div className="stage3-json">
-                <pre>{pipeline ? JSON.stringify(pipeline, null, 2) : "{ }"}</pre>
-              </div>
               {pipeline?.warnings.length ? (
                 <div className="stage3-warnings">
                   {pipeline.warnings.map((warning) => (

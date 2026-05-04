@@ -38,7 +38,6 @@ export interface MaskSummary {
 
 export interface Stage3MotionBase {
   imageMatchCost: number;
-  totalCost: number;
 }
 
 export interface Stage3TransitionMotion extends Stage3MotionBase {
@@ -51,7 +50,6 @@ export interface Stage3RotationMotion extends Stage3MotionBase {
   type: "rotation";
   anchor: Position;
   thetaDeg: number;
-  translationCost: number;
 }
 
 export interface Stage3SwapSlideMotion {
@@ -73,7 +71,6 @@ export interface Stage3ComparisonTrace {
   winner: "transition" | "rotation";
   anchorsTested: number;
   sampledPixels: number;
-  complexityLambda: number;
 }
 
 export interface Stage3RuleTrace {
@@ -126,11 +123,17 @@ export function getStage3SegmenterStatus(): {
   };
 }
 
-const ROTATION_COMPLEXITY = 2;
-const TRANSLATION_COMPLEXITY = 1;
-const COMPLEXITY_LAMBDA = 12;
-const ROTATION_ANCHOR_SAMPLES = 48;
+// Target number of anchor candidates — grid-sampled uniformly inside the mask
+const ROTATION_ANCHOR_TARGET = 400;
+// Rotations smaller than this are treated as degenerate (prefer translation instead)
+const ROTATION_MIN_ANGLE_DEG = 5;
+// Rotation must beat translation's imageMatchCost by at least this many points to win
+const ROTATION_PREFERENCE_MARGIN = 6;
 const ROTATION_SWEEP_SAMPLES = 12;
+// Fine-pass: top-K anchors from coarse pass get an angle sweep
+const ROTATION_FINE_TOP_K = 5;
+// Fine-pass angle sweep: ±this many degrees around derived theta, at 1° steps
+const ROTATION_FINE_SWEEP_DEG = 15;
 
 interface RotationEvalResult {
   movement: Stage3RotationMotion;
@@ -288,10 +291,20 @@ function sampleMaskPoints(mask: CompactMask, targetCount = 200): Position[] {
   return all.filter((_, index) => index % stride === 0).slice(0, targetCount);
 }
 
-function sampleAnchorCandidates(mask: CompactMask): Position[] {
-  const points = sampleMaskPoints(mask, ROTATION_ANCHOR_SAMPLES);
-  const anchors = points.length > 0 ? points : [mask.center];
-  return anchors.map(roundPoint);
+function sampleAnchorCandidates(mask: CompactMask, target = ROTATION_ANCHOR_TARGET): Position[] {
+  // Grid scan over the bounding box; step is sized so ~target cells fall inside the mask.
+  // This gives uniform spatial coverage regardless of mask shape, unlike stride-sampling
+  // pixel lists which cluster wherever the raster scan happens to land.
+  const step = Math.max(1, Math.floor(Math.sqrt((mask.width * mask.height) / target)));
+  const anchors: Position[] = [];
+  for (let y = 0; y < mask.height; y += step) {
+    for (let x = 0; x < mask.width; x += step) {
+      if (mask.data[y * mask.width + x]) {
+        anchors.push({ x: mask.x + x, y: mask.y + y });
+      }
+    }
+  }
+  return anchors.length > 0 ? anchors : [roundPoint(mask.center)];
 }
 
 function evaluateTranslation(
@@ -299,8 +312,12 @@ function evaluateTranslation(
   imageA: ImageBuffers,
   imageB: ImageBuffers,
 ): Stage3TransitionMotion {
-  const dx = annotation.pointB.x - annotation.pointA.x;
-  const dy = annotation.pointB.y - annotation.pointA.y;
+  // Use maskA center → pointB as the displacement estimate. Raw click-to-click
+  // is unreliable for large objects because the user may click different relative
+  // positions on the object in each image. The mask center is a stable geometric
+  // reference for where the object sits in A; pointB is the approximate landing hint.
+  const dx = Math.round(annotation.pointB.x - annotation.maskA.center.x);
+  const dy = Math.round(annotation.pointB.y - annotation.maskA.center.y);
   const points = sampleMaskPoints(annotation.maskA);
   let total = 0;
   for (const point of points) {
@@ -309,13 +326,61 @@ function evaluateTranslation(
     total += colorDiff(source, target);
   }
   const imageMatchCost = points.length > 0 ? total / points.length : 255;
-  return {
-    type: "transition",
-    dx,
-    dy,
-    imageMatchCost,
-    totalCost: imageMatchCost + COMPLEXITY_LAMBDA * TRANSLATION_COMPLEXITY,
-  };
+  return { type: "transition", dx, dy, imageMatchCost };
+}
+
+function refineTranslation(
+  annotation: Stage3Annotation,
+  imageA: ImageBuffers,
+  imageB: ImageBuffers,
+  initialDx: number,
+  initialDy: number,
+  searchRadius = 15,
+  step = 1,
+): { dx: number; dy: number; cost: number } {
+  const points = sampleMaskPoints(annotation.maskA);
+  let bestDx = initialDx;
+  let bestDy = initialDy;
+  let bestCost = Infinity;
+
+  for (let oy = -searchRadius; oy <= searchRadius; oy += step) {
+    for (let ox = -searchRadius; ox <= searchRadius; ox += step) {
+      const dx = initialDx + ox;
+      const dy = initialDy + oy;
+      let total = 0;
+      for (const p of points) {
+        total += colorDiff(
+          getPixelColor(imageA, p.x, p.y),
+          getPixelColor(imageB, p.x + dx, p.y + dy),
+        );
+      }
+      const cost = total / points.length;
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestDx = dx;
+        bestDy = dy;
+      }
+    }
+  }
+  return { dx: bestDx, dy: bestDy, cost: bestCost };
+}
+
+function evalRotationCost(
+  points: Position[],
+  imageA: ImageBuffers,
+  imageB: ImageBuffers,
+  anchor: Position,
+  theta: number,
+): number {
+  let total = 0;
+  for (const point of points) {
+    const rotated = rotatePoint(point, anchor, theta);
+    total += colorDiff(
+      getPixelColor(imageA, point.x, point.y),
+      getPixelColor(imageB, rotated.x, rotated.y),
+    );
+  }
+  return points.length > 0 ? total / points.length : 255;
 }
 
 function evaluateRotation(
@@ -325,42 +390,59 @@ function evaluateRotation(
 ): RotationEvalResult {
   const anchors = sampleAnchorCandidates(annotation.maskA);
   const points = sampleMaskPoints(annotation.maskA);
-  let best: Stage3RotationMotion | null = null;
   let anchorsTested = 0;
 
+  // Use maskA center as the arm reference in A — stable for large objects where
+  // the user's pointA click could be anywhere and would give a wrong derived angle.
+  const armA = roundPoint(annotation.maskA.center);
+
+  // --- Coarse pass: test every anchor at its single derived theta ---
+  interface CoarseResult {
+    anchor: Position;
+    thetaDerivedDeg: number;
+    imageMatchCost: number;
+  }
+  const coarseResults: CoarseResult[] = [];
+
   for (const anchor of anchors) {
-    const va = {
-      x: annotation.pointA.x - anchor.x,
-      y: annotation.pointA.y - anchor.y,
-    };
-    const vb = {
-      x: annotation.pointB.x - anchor.x,
-      y: annotation.pointB.y - anchor.y,
-    };
-    const lenA = Math.hypot(va.x, va.y);
-    const lenB = Math.hypot(vb.x, vb.y);
-    if (lenA < 2 || lenB < 2) continue;
+    const va = { x: armA.x - anchor.x, y: armA.y - anchor.y };
+    const vb = { x: annotation.pointB.x - anchor.x, y: annotation.pointB.y - anchor.y };
+    if (Math.hypot(va.x, va.y) < 2 || Math.hypot(vb.x, vb.y) < 2) continue;
     anchorsTested += 1;
 
-    const theta = Math.atan2(vb.y, vb.x) - Math.atan2(va.y, va.x);
-    let total = 0;
-    for (const point of points) {
-      const source = getPixelColor(imageA, point.x, point.y);
-      const rotated = rotatePoint(point, anchor, theta);
-      const target = getPixelColor(imageB, rotated.x, rotated.y);
-      total += colorDiff(source, target);
-    }
-    const imageMatchCost = points.length > 0 ? total / points.length : 255;
-    const candidate: Stage3RotationMotion = {
-      type: "rotation",
-      anchor,
-      thetaDeg: (theta * 180) / Math.PI,
-      imageMatchCost,
-      translationCost: 0,
-      totalCost: imageMatchCost + COMPLEXITY_LAMBDA * ROTATION_COMPLEXITY,
-    };
-    if (!best || candidate.totalCost < best.totalCost) {
-      best = candidate;
+    const thetaDerivedDeg = ((Math.atan2(vb.y, vb.x) - Math.atan2(va.y, va.x)) * 180) / Math.PI;
+    if (Math.abs(thetaDerivedDeg) < ROTATION_MIN_ANGLE_DEG) continue;
+
+    const theta = (thetaDerivedDeg * Math.PI) / 180;
+    const imageMatchCost = evalRotationCost(points, imageA, imageB, anchor, theta);
+    coarseResults.push({ anchor, thetaDerivedDeg, imageMatchCost });
+  }
+
+  // --- Fine pass: top-K anchors get a ±ROTATION_FINE_SWEEP_DEG angle sweep ---
+  // pointB is only an approximate hint so the derived theta can be off by several
+  // degrees. Sweeping around it finds the true photometric minimum.
+  const topK = coarseResults
+    .slice()
+    .sort((a, b) => a.imageMatchCost - b.imageMatchCost)
+    .slice(0, ROTATION_FINE_TOP_K);
+
+  let best: Stage3RotationMotion | null = null;
+
+  for (const { anchor, thetaDerivedDeg } of topK) {
+    for (let dDeg = -ROTATION_FINE_SWEEP_DEG; dDeg <= ROTATION_FINE_SWEEP_DEG; dDeg += 1) {
+      const thetaDeg = thetaDerivedDeg + dDeg;
+      if (Math.abs(thetaDeg) < ROTATION_MIN_ANGLE_DEG) continue;
+      const theta = (thetaDeg * Math.PI) / 180;
+      const imageMatchCost = evalRotationCost(points, imageA, imageB, anchor, theta);
+      const candidate: Stage3RotationMotion = {
+        type: "rotation",
+        anchor,
+        thetaDeg,
+        imageMatchCost,
+      };
+      if (!best || candidate.imageMatchCost < best.imageMatchCost) {
+        best = candidate;
+      }
     }
   }
 
@@ -371,8 +453,6 @@ function evaluateRotation(
         anchor: roundPoint(annotation.maskA.center),
         thetaDeg: 0,
         imageMatchCost: 255,
-        translationCost: 0,
-        totalCost: 255 + COMPLEXITY_LAMBDA * ROTATION_COMPLEXITY,
       },
     anchorsTested,
     sampledPixels: points.length,
@@ -797,6 +877,70 @@ function fillHoles(
   }
 }
 
+/**
+ * Builds a clean background plate from direct CompactMask arrays.
+ * Equivalent to buildCleanBackgroundPlateUrl but accepts masks directly
+ * (no Stage3Annotation / Stage3ObjectResult format required).
+ *
+ * - masksA[i]: the object's mask in Image A
+ * - masksB[i]: the object's mask in Image B (null if the object has no B position)
+ * - If imageB is null, uses imageA pixels to fill holes (pure inpainting).
+ */
+export function buildBackgroundFromMasks(
+  imageA: HTMLImageElement,
+  imageB: HTMLImageElement | null,
+  masksA: CompactMask[],
+  masksB: (CompactMask | null)[],
+): string {
+  const width = imageA.naturalWidth;
+  const height = imageA.naturalHeight;
+  const bufA = buildImageBuffers(imageA);
+  const bufB = imageB ? buildImageBuffers(imageB) : bufA;
+
+  const coverageA = new Uint8Array(width * height);
+  const coverageB = new Uint8Array(width * height);
+
+  for (let i = 0; i < masksA.length; i += 1) {
+    writeMaskToCoverage(dilateMask(masksA[i], 3, width, height), coverageA, width);
+    const maskB = masksB[i];
+    if (maskB) {
+      writeMaskToCoverage(dilateMask(maskB, 3, width, height), coverageB, width);
+    }
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not create background canvas.");
+
+  const imageData = ctx.createImageData(width, height);
+  const known = new Uint8Array(width * height);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i1 = y * width + x;
+      const i4 = i1 * 4;
+      let pixel: PixelSource | null = null;
+      if (coverageA[i1] === 0) {
+        pixel = sampleFromBuffer(bufA, x, y);
+      } else if (coverageB[i1] === 0) {
+        pixel = sampleFromBuffer(bufB, x, y);
+      }
+      if (!pixel) continue;
+      imageData.data[i4] = pixel.data[0];
+      imageData.data[i4 + 1] = pixel.data[1];
+      imageData.data[i4 + 2] = pixel.data[2];
+      imageData.data[i4 + 3] = pixel.data[3];
+      known[i1] = 1;
+    }
+  }
+
+  fillHoles(imageData.data, known, width, height);
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
 export function buildCleanBackgroundPlateUrl(
   imageA: HTMLImageElement,
   imageB: HTMLImageElement,
@@ -1026,33 +1170,50 @@ export function inferStage3Object(
 
   const buffersA = buildImageBuffers(imageA);
   const buffersB = buildImageBuffers(imageB);
-  const translation = evaluateTranslation(annotation, buffersA, buffersB);
+  const rawTranslation = evaluateTranslation(annotation, buffersA, buffersB);
+
+  // Coarse radius covers at least half the mask's longer dimension so we can still
+  // find the object even when the user's pointB click is at the opposite edge from
+  // the mask center. Fine pass tightens to ±3 around the coarse winner.
+  const coarseRadius = Math.max(15, Math.ceil(Math.max(annotation.maskA.width, annotation.maskA.height) / 2));
+  const coarse = refineTranslation(annotation, buffersA, buffersB, rawTranslation.dx, rawTranslation.dy, coarseRadius, 3);
+  const refined = refineTranslation(annotation, buffersA, buffersB, coarse.dx, coarse.dy, 3, 1);
+  const translation: Stage3TransitionMotion = {
+    ...rawTranslation,
+    dx: refined.dx,
+    dy: refined.dy,
+    imageMatchCost: refined.cost,
+  };
+
   const rotationEval = evaluateRotation(annotation, buffersA, buffersB);
   const rotation = rotationEval.movement;
-  rotation.translationCost = translation.totalCost;
 
   logs.push(
-    `inputs: point_A=(${annotation.pointA.x.toFixed(1)}, ${annotation.pointA.y.toFixed(1)}), point_B=(${annotation.pointB.x.toFixed(1)}, ${annotation.pointB.y.toFixed(1)})`,
+    `inputs: point_A=(${annotation.pointA.x.toFixed(1)}, ${annotation.pointA.y.toFixed(1)}), point_B=(${annotation.pointB.x.toFixed(1)}, ${annotation.pointB.y.toFixed(1)}), mask_center=(${annotation.maskA.center.x.toFixed(1)}, ${annotation.maskA.center.y.toFixed(1)})`,
   );
   logs.push(
     `mask_A: bbox=(${annotation.maskA.x}, ${annotation.maskA.y}, ${annotation.maskA.width}, ${annotation.maskA.height}), area=${annotation.maskA.area}`,
   );
   logs.push(
-    `complexity penalty: transition=${COMPLEXITY_LAMBDA * TRANSLATION_COMPLEXITY}, rotation=${COMPLEXITY_LAMBDA * ROTATION_COMPLEXITY}`,
-  );
-  logs.push(
-    `translation: dx=${translation.dx.toFixed(1)}, dy=${translation.dy.toFixed(1)}, image=${translation.imageMatchCost.toFixed(2)}, total=${translation.totalCost.toFixed(2)}`,
+    `translation: initial dx=${rawTranslation.dx.toFixed(1)}, dy=${rawTranslation.dy.toFixed(1)} (coarse_r=${coarseRadius}) -> refined dx=${translation.dx.toFixed(1)}, dy=${translation.dy.toFixed(1)}, image=${translation.imageMatchCost.toFixed(2)}`,
   );
   logs.push(
     `rotation search: anchors_tested=${rotationEval.anchorsTested}, sampled_pixels=${rotationEval.sampledPixels}`,
   );
   logs.push(
-    `rotation best: anchor=(${rotation.anchor.x}, ${rotation.anchor.y}), theta=${rotation.thetaDeg.toFixed(1)}deg, image=${rotation.imageMatchCost.toFixed(2)}, total=${rotation.totalCost.toFixed(2)}`,
+    `rotation best: anchor=(${rotation.anchor.x}, ${rotation.anchor.y}), theta=${rotation.thetaDeg.toFixed(1)}deg, image=${rotation.imageMatchCost.toFixed(2)}`,
   );
 
-  const movement = translation.totalCost <= rotation.totalCost ? translation : rotation;
+  // Winner decision: compare imageMatchCost directly.
+  // Rotation must beat translation by ROTATION_PREFERENCE_MARGIN to overcome the
+  // inherent preference for simpler mechanisms, and its angle must be non-degenerate.
+  const rotationIsDegenerate = Math.abs(rotation.thetaDeg) < ROTATION_MIN_ANGLE_DEG;
+  const rotationWins =
+    !rotationIsDegenerate &&
+    rotation.imageMatchCost < translation.imageMatchCost - ROTATION_PREFERENCE_MARGIN;
+  const movement = rotationWins ? rotation : translation;
   logs.push(
-    `winner=${movement.type} (margin=${Math.abs(translation.totalCost - rotation.totalCost).toFixed(2)})`,
+    `winner=${movement.type} (translation_image=${translation.imageMatchCost.toFixed(2)}, rotation_image=${rotation.imageMatchCost.toFixed(2)}, margin_needed=${ROTATION_PREFERENCE_MARGIN}, rotation_degenerate=${rotationIsDegenerate})`,
   );
 
   const result: Stage3ObjectResult = {
@@ -1068,7 +1229,6 @@ export function inferStage3Object(
       winner: movement.type,
       anchorsTested: rotationEval.anchorsTested,
       sampledPixels: rotationEval.sampledPixels,
-      complexityLambda: COMPLEXITY_LAMBDA,
     },
     logs,
     layer: 0,

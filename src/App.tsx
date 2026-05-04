@@ -44,7 +44,6 @@ export default function App() {
   );
   const [showFabrication, setShowFabrication] = useState(false); // ← new
   const [stage3Open, setStage3Open] = useState(false);
-
   const selectedObject = objects.find((o) => o.id === selectedId);
   const objectsWithMovement = objects.filter((o) => o.movement);
 
@@ -546,6 +545,7 @@ export default function App() {
           onImport={handleStage3Import}
         />
       )}
+
     </div>
   );
 }
